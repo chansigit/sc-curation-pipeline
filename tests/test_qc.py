@@ -83,3 +83,9 @@ def test_compute_qc_streaming_matches_inmemory(tmp_path, h5ad_writer, make_spars
     assert streamed["median_counts_per_cell"] == full["median_counts_per_cell"]
     assert streamed["median_genes_per_cell"] == full["median_genes_per_cell"]
     assert abs(streamed["mito_pct"] - full["mito_pct"]) < 1e-9
+
+
+def test_partitions_def_name():
+    from sc_curation_pipeline.defs.partitions import h5ad_partitions
+
+    assert h5ad_partitions.name == "h5ad_samples"
