@@ -89,3 +89,120 @@ def test_partitions_def_name():
     from sc_curation_pipeline.defs.partitions import h5ad_partitions
 
     assert h5ad_partitions.name == "h5ad_samples"
+
+
+import os
+
+import dagster as dg
+import pytest
+
+from sc_curation_pipeline.defs.qc import h5ad_qc, h5ad_qc_job  # noqa: E402
+from sc_curation_pipeline.defs.settings import CurationSettings, partition_key_for  # noqa: E402
+from sc_curation_pipeline.defs.partitions import h5ad_partitions  # noqa: E402
+
+
+def _materialize(path_to_h5ad, watch_dir, key, settings, instance):
+    return dg.materialize(
+        [h5ad_qc],
+        partition_key=key,
+        instance=instance,
+        resources={"curation": settings},
+        tags={"sc/h5ad_path": path_to_h5ad},
+        raise_on_error=False,
+    )
+
+
+def test_h5ad_qc_materialize_pass(tmp_path, h5ad_writer, make_sparse_counts):
+    watch = str(tmp_path / "watch")
+    folder = os.path.join(watch, "GSE1_sampleA")
+    X, var_names = make_sparse_counts(n_obs=300, n_vars=12, seed=3)
+    path = h5ad_writer(os.path.join(folder, "a.h5ad"), X, var_names=var_names)
+    key = partition_key_for(watch, folder)
+    settings = CurationSettings(watch_dir=watch, min_cells=100, max_mito_pct=90.0)
+
+    instance = dg.DagsterInstance.ephemeral()
+    instance.add_dynamic_partitions(h5ad_partitions.name, [key])
+    result = _materialize(path, watch, key, settings, instance)
+    assert result.success
+
+    mats = result.asset_materializations_for_node("h5ad_qc")
+    md = mats[0].metadata
+    assert md["n_cells"].value == 300
+    assert md["n_genes"].value == 12
+    assert mats[0].partition == key
+    assert md["h5ad_path"].value == os.path.abspath(path)
+
+    evals = {e.check_name: e for e in result.get_asset_check_evaluations()}
+    assert evals["min_cells"].passed is True
+    assert evals["is_raw_counts"].passed is True
+    assert evals["max_mito_pct"].severity == dg.AssetCheckSeverity.ERROR
+    # ERROR-severity checks render red but do NOT fail the run by default.
+    assert result.success is True
+    assert not result.is_node_failed("h5ad_qc")
+
+
+def test_h5ad_qc_soft_gate_fails_check_not_run(tmp_path, h5ad_writer, make_sparse_counts):
+    watch = str(tmp_path / "watch")
+    folder = os.path.join(watch, "tiny")
+    X, var_names = make_sparse_counts(n_obs=10, n_vars=6, seed=4)
+    path = h5ad_writer(os.path.join(folder, "t.h5ad"), X, var_names=var_names)
+    key = partition_key_for(watch, folder)
+    settings = CurationSettings(watch_dir=watch, min_cells=100, max_mito_pct=20.0)
+
+    instance = dg.DagsterInstance.ephemeral()
+    instance.add_dynamic_partitions(h5ad_partitions.name, [key])
+    result = _materialize(path, watch, key, settings, instance)
+    assert result.success  # soft gate -> green run
+
+    evals = {e.check_name: e for e in result.get_asset_check_evaluations()}
+    assert evals["min_cells"].passed is False  # 10 < 100 -> red check
+
+
+def test_h5ad_qc_corrupt_raises_failure(tmp_path):
+    watch = str(tmp_path / "watch")
+    folder = os.path.join(watch, "bad")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, "broken.h5ad")
+    with open(path, "wb") as fh:
+        fh.write(b"this is not an hdf5 file")
+    key = partition_key_for(watch, folder)
+    settings = CurationSettings(watch_dir=watch)
+
+    instance = dg.DagsterInstance.ephemeral()
+    instance.add_dynamic_partitions(h5ad_partitions.name, [key])
+    result = _materialize(path, watch, key, settings, instance)
+    assert result.success is False
+    assert result.is_node_failed("h5ad_qc")
+
+
+def test_h5ad_qc_missing_watch_dir_raises(tmp_path):
+    # Partition whose run carries NO sc/h5ad_path tag, and a watch_dir that does
+    # not exist on disk -> resolve_h5ad_path must raise dg.Failure (spec §5.1).
+    missing = str(tmp_path / "does_not_exist")
+    key = "ghost_sample"
+    settings = CurationSettings(watch_dir=missing)
+
+    instance = dg.DagsterInstance.ephemeral()
+    instance.add_dynamic_partitions(h5ad_partitions.name, [key])
+    result = dg.materialize(
+        [h5ad_qc],
+        partition_key=key,
+        instance=instance,
+        resources={"curation": settings},
+        raise_on_error=False,  # no sc/h5ad_path tag -> falls back to watch dir
+    )
+    assert result.success is False
+    assert result.is_node_failed("h5ad_qc")
+    failures = [
+        e
+        for e in result.get_step_failure_events()
+        if e.step_key == "h5ad_qc"
+    ]
+    assert failures
+    msg = failures[0].event_specific_data.error.message
+    assert "SC_CURATION_WATCH_DIR" in msg
+    assert missing in msg
+
+
+def test_h5ad_qc_job_targets_asset():
+    assert h5ad_qc_job.name == "h5ad_qc_job"
