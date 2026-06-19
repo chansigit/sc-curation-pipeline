@@ -42,6 +42,28 @@ $SC_CURATION_WATCH_DIR/   (可配置, 在 $SCRATCH 下, 递归扫描)
 
 ---
 
+## 快速开始(TL;DR)
+
+> 首次需先安装(见下方 **第 1 节**)。装好后,每次开工只需:
+
+```bash
+cd /scratch/users/chensj16/projects/eca-dagster-pipeline/sc-curation-pipeline
+cp .env.example .env        # 首次:填好 SC_CURATION_WATCH_DIR(以后不用再 cp)
+SC_UI_BASIC_AUTH="csj:强密码" scripts/serve-ui.sh up   # 后台起 dg dev + ngrok 隧道
+```
+
+打开 **https://csj.ngrok.io**,在 UI 里把 `watch_h5ad_dir` sensor 开成 **ON**。往 watch 目录放样本(**先 `*.h5ad`,再 `.done`**),≤30s 后该样本的 QC 就出现在 **Assets → `h5ad_qc`**。
+
+```bash
+scripts/serve-ui.sh status   # 状态 + 本地/公网 URL
+scripts/serve-ui.sh logs     # 两边日志
+scripts/serve-ui.sh down     # 全部停掉
+```
+
+> 只想本地看、不公开暴露:省掉 `SC_UI_BASIC_AUTH` 会**裸奔**(脚本会警告);或改用 SSH 转发(见第 4 节)。
+
+---
+
 ## 1. 安装(把项目装进运行环境)
 
 一次性把本项目以**可编辑方式**装进 `dl2025`:
