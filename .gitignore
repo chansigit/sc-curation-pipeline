@@ -204,4 +204,5 @@ __marimo__/
 
 # Dagster
 .dagster_home/
+.tmp_dagster_home*/
 .dg/

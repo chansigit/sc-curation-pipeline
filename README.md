@@ -153,11 +153,11 @@ ngrok http 27182 --domain=csj.ngrok.io --basic-auth "你:一个强密码"
 ```
 然后任意地方浏览器打开 https://csj.ngrok.io 。
 
-或用仓库里的脚本(配置走 `SC_UI_PORT` / `SC_UI_NGROK_DOMAIN` / `SC_UI_BASIC_AUTH` 环境变量):
+或用仓库里的脚本 `scripts/serve-ui.sh` —— **一键把 `dg dev`(后台)+ ngrok 隧道一起拉起/关掉**,`dg dev` 不再占着终端(配置走 `SC_UI_PORT` / `SC_UI_NGROK_DOMAIN` / `SC_UI_BASIC_AUTH`;run 历史/已登记样本存到项目内 gitignored 的 `.dagster_home/`,重启不丢):
 ```bash
-SC_UI_BASIC_AUTH="csj:一个强密码" scripts/ui-tunnel.sh up   # 启动(后台)
-scripts/ui-tunnel.sh status                                # 看状态 + 公网 URL
-scripts/ui-tunnel.sh down                                  # 断开
+SC_UI_BASIC_AUTH="csj:一个强密码" scripts/serve-ui.sh up   # 启动(后台)
+scripts/serve-ui.sh status                                # 看状态 + 公网 URL
+scripts/serve-ui.sh down                                  # 断开
 ```
 
 > ⚠️ 注意:
