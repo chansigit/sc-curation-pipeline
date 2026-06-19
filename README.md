@@ -70,7 +70,38 @@ uv pip install -p /scratch/users/chensj16/venvs/dl2025/.venv/bin/python \
 | `SC_CURATION_MIN_CELLS` | `100` | check:细胞数下限 |
 | `SC_CURATION_MAX_MITO_PCT` | `20` | check:中位 mito% 上限 |
 
-`SC_CURATION_WATCH_DIR` 是必填的——没设会立刻报错(注册资源时就要读它)。
+`SC_CURATION_WATCH_DIR` 是必填的——没设会立刻报错(注册资源时就要读它)。可选变量留空或写成非法值会**安全退回默认值**(不会让服务崩溃)。
+
+### 怎么设置这些变量
+
+三种方式,**推荐第 ① 种**:
+
+**① `.env` 文件(推荐 —— `dg` 启动时自动加载)**
+在项目根目录放一个 `.env`,`dg dev` / `dg check defs` 会自动把它加载进环境,**不用每次 `export`**。仓库带了模板 `.env.example`:
+```bash
+cd /scratch/users/chensj16/projects/eca-dagster-pipeline/sc-curation-pipeline
+cp .env.example .env        # 然后编辑 .env,至少填好 SC_CURATION_WATCH_DIR
+```
+`.env` 已在 `.gitignore` 里、不会被提交。内容示例:
+```dotenv
+SC_CURATION_WATCH_DIR=/scratch/users/chensj16/sc-curation-watch
+SC_CURATION_MIN_CELLS=200
+SC_CURATION_MAX_MITO_PCT=15
+# 其余不写就用默认值
+```
+
+**② 临时 `export`(只对当前 shell 生效)**
+```bash
+export SC_CURATION_WATCH_DIR=/scratch/users/chensj16/sc-curation-watch
+export SC_CURATION_MIN_CELLS=200
+```
+在同一个 shell 里再 `dg dev` 即可。
+
+**③ 写进 SLURM 作业脚本(以后跑常驻/批处理时)**
+在 sbatch 脚本里 `export` 这些变量,或 `cd` 到项目目录靠 `.env` 自动加载。
+
+> 注:本项目用 `os.getenv` 读取(不是 `dg.EnvVar`),所以 `dg list envs` 不会列出它们——以上面那张表为准。
+> 如果以后加了 **GitHub Actions** CI:把值放进仓库 **Settings → Secrets and variables → Actions**,再在 workflow 的 `env:` 里注入(不要把真实路径/密钥写进会提交的文件)。
 
 ---
 
@@ -102,6 +133,8 @@ export SC_CURATION_WATCH_DIR=/scratch/users/chensj16/<你的watch目录>
 cd /scratch/users/chensj16/projects/eca-dagster-pipeline/sc-curation-pipeline
 /scratch/users/chensj16/venvs/dl2025/.venv/bin/dg dev
 ```
+
+> 如果你已经建好 `.env`(见上面「怎么设置这些变量」),上面那行 `export` 就能省掉——`dg dev` 会自动加载 `.env`。
 
 从本地电脑做端口转发看 UI(`dg dev` 跑在计算节点的 3000 端口):
 
