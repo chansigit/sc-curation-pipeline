@@ -135,3 +135,15 @@ def test_sensor_write_once_no_rerun_on_change(tmp_path):
         assert key not in [r.partition_key for r in second.run_requests]
     else:
         assert isinstance(second, dg.SkipReason)
+
+
+def test_registration_bundles_everything(monkeypatch):
+    monkeypatch.setenv("SC_CURATION_WATCH_DIR", "/tmp/sc_watch_test")
+    from sc_curation_pipeline.defs.registration import defs as defs_fn
+
+    d = defs_fn()
+    assert isinstance(d, dg.Definitions)
+    keys = {k.to_user_string() for k in d.resolve_all_asset_keys()}
+    assert "h5ad_qc" in keys
+    assert "curation" in d.resources
+    assert d.get_sensor_def("watch_h5ad_dir") is not None
