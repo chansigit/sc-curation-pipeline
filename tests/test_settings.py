@@ -1,5 +1,3 @@
-import importlib
-
 import pytest
 
 from sc_curation_pipeline.defs import settings as S
