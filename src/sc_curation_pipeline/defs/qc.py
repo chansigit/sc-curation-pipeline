@@ -6,6 +6,7 @@ import dagster as dg
 import numpy as np
 import scipy.sparse as sp
 import anndata as ad
+import h5py
 
 from sc_curation_pipeline.defs.partitions import h5ad_partitions
 from sc_curation_pipeline.defs.settings import CurationSettings, path_for_partition_key
@@ -175,11 +176,23 @@ def resolve_h5ad_path(
 def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
     """Lightweight QC on one sample's h5ad; results as metadata + checks."""
     path = resolve_h5ad_path(context, curation)
+    # A non-HDF5 file is corrupt/wrong, not a transient hiccup -> fail fast with a
+    # clear reason and DO NOT retry. h5py.is_hdf5 only checks the file signature,
+    # so it is cheap and deterministic.
+    if not h5py.is_hdf5(path):
+        raise dg.Failure(
+            description=f"not a valid HDF5/h5ad file: {path!r} (file signature not found)",
+            metadata={
+                "partition": dg.MetadataValue.text(context.partition_key),
+                "h5ad_path": dg.MetadataValue.path(path),
+            },
+            allow_retries=False,
+        )
     try:
         qc = compute_qc(path)
     except dg.Failure:
         raise
-    except Exception as exc:  # corrupt / unreadable h5ad -> hard error (red run)
+    except Exception as exc:  # valid HDF5 but read/QC failed -> may be transient I/O -> retriable
         raise dg.Failure(
             description=f"failed to read/QC h5ad at {path!r}: {exc}",
             metadata={

@@ -174,6 +174,12 @@ def test_h5ad_qc_corrupt_raises_failure(tmp_path):
     result = _materialize(path, watch, key, settings, instance)
     assert result.success is False
     assert result.is_node_failed("h5ad_qc")
+    # Fails FAST with a clear reason (allow_retries=False), not retried to
+    # "Exceeded max_retries".
+    fails = [e for e in result.get_step_failure_events() if e.step_key == "h5ad_qc"]
+    msg = fails[0].event_specific_data.error.message
+    assert "HDF5" in msg
+    assert "max_retries" not in msg
 
 
 def test_h5ad_qc_missing_watch_dir_raises(tmp_path):
@@ -230,15 +236,16 @@ def test_compute_qc_inf_not_raw(tmp_path, h5ad_writer):
     assert compute_qc(path)["is_raw_counts"] is False
 
 
-def test_h5ad_qc_transient_error_is_retried(tmp_path, monkeypatch):
-    # Regression for BUG 2: a transient (non-Failure) read error must be retried
-    # by RetryPolicy(max_retries=2); previously allow_retries=False suppressed it.
+def test_h5ad_qc_transient_error_is_retried(tmp_path, monkeypatch, h5ad_writer):
+    # Regression for BUG 2: a transient (non-Failure) read error on a VALID h5ad
+    # must be retried by RetryPolicy(max_retries=2). The file is a real HDF5 so it
+    # passes the is_hdf5 fast-fail gate and reaches compute_qc.
+    import numpy as np
     from sc_curation_pipeline.defs import qc as qcmod
     watch = str(tmp_path / "watch")
     folder = os.path.join(watch, "flaky")
-    os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, "f.h5ad")
-    open(path, "wb").close()
+    path = h5ad_writer(os.path.join(folder, "f.h5ad"),
+                       np.ones((3, 2), dtype="float32"), var_names=["GENE0", "GENE1"])
     key = partition_key_for(watch, folder)
     settings = CurationSettings(watch_dir=watch)
     calls = []
