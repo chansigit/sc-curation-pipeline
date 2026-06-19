@@ -9,12 +9,12 @@
 # Run on the SAME compute node where `dg dev` is running.
 #
 # Config via env (defaults in parens):
-#   SC_UI_PORT          local Dagster UI port            (3000)
+#   SC_UI_PORT          local Dagster UI port            (27182)
 #   SC_UI_NGROK_DOMAIN  your reserved ngrok domain        (csj.ngrok.io)
 #   SC_UI_BASIC_AUTH    "user:pass" -> adds --basic-auth  (unset = PUBLIC, no auth!)
 set -euo pipefail
 
-PORT="${SC_UI_PORT:-3000}"
+PORT="${SC_UI_PORT:-27182}"
 DOMAIN="${SC_UI_NGROK_DOMAIN:-csj.ngrok.io}"
 RUNDIR="${TMPDIR:-/tmp}/sc-curation-ui-tunnel"
 PIDFILE="$RUNDIR/ngrok.pid"

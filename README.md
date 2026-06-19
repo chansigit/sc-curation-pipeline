@@ -131,16 +131,16 @@ $SC_CURATION_WATCH_DIR/
 ```bash
 export SC_CURATION_WATCH_DIR=/scratch/users/chensj16/<你的watch目录>
 cd /scratch/users/chensj16/projects/eca-dagster-pipeline/sc-curation-pipeline
-/scratch/users/chensj16/venvs/dl2025/.venv/bin/dg dev
+/scratch/users/chensj16/venvs/dl2025/.venv/bin/dg dev -p 27182
 ```
 
 > 如果你已经建好 `.env`(见上面「怎么设置这些变量」),上面那行 `export` 就能省掉——`dg dev` 会自动加载 `.env`。
 
-从本地电脑做端口转发看 UI(`dg dev` 跑在计算节点的 3000 端口):
+从本地电脑做端口转发看 UI(`dg dev` 跑在计算节点的 27182 端口):
 
 ```bash
-ssh -L 3000:<计算节点名, 如 sh02-06n11>:3000 <你的SUNet>@login.sherlock.stanford.edu
-# 然后浏览器打开 http://localhost:3000
+ssh -L 27182:<计算节点名, 如 sh02-06n11>:27182 <你的SUNet>@login.sherlock.stanford.edu
+# 然后浏览器打开 http://localhost:27182
 ```
 
 **(或)用 ngrok 暴露到固定域名** —— 不想每次 SSH 转发的话,在**同一个计算节点**上另开一个终端跑(`dg dev` 继续开着):
@@ -149,7 +149,7 @@ ssh -L 3000:<计算节点名, 如 sh02-06n11>:3000 <你的SUNet>@login.sherlock.
 # ngrok config add-authtoken <你的token>
 
 # 给 UI 加一层认证(强烈建议!),再暴露到你的固定域名:
-ngrok http 3000 --domain=csj.ngrok.io --basic-auth "你:一个强密码"
+ngrok http 27182 --domain=csj.ngrok.io --basic-auth "你:一个强密码"
 ```
 然后任意地方浏览器打开 https://csj.ngrok.io 。
 
@@ -236,7 +236,7 @@ docs/superpowers/             # 设计 spec 与实现 plan
 - **`dg check defs` 报 venv 不匹配警告**:无害——因为用 `dl2025` 跑、而项目里另有一个闲置的 `.venv`。想消除可在配置里把 `project_and_activated_venv_mismatch` 加进 `cli.suppress_warnings`。
 - **`dg check defs` 抱怨 `SC_CURATION_WATCH_DIR` 没设**:它是必填项,临时给个值即可(如上 `/tmp/x`)。
 - **sensor 不动**:确认 UI 里它是 **ON**(默认 STOPPED);确认样本文件夹里**有 `.done`** 且**恰好一个** `*.h5ad`。
-- **UI 打不开**:确认 `dg dev` 在计算节点跑、并做了 `ssh -L 3000:<节点>:3000` 转发。
+- **UI 打不开**:确认 `dg dev` 在计算节点跑、并做了 `ssh -L 27182:<节点>:27182` 转发。
 
 ---
 
