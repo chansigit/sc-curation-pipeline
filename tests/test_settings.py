@@ -61,9 +61,15 @@ def test_sanitize_key_no_collision():
     assert S.path_for_partition_key(k_flat) == "GSE1__sampleB"
 
 
-def test_watch_dir_missing_raises(monkeypatch):
-    monkeypatch.delenv("SC_CURATION_WATCH_DIR", raising=False)
-    with pytest.raises(KeyError) as excinfo:
+@pytest.mark.parametrize("setval", [None, "", "   "])
+def test_watch_dir_missing_or_empty_raises(monkeypatch, setval):
+    # Unset, empty, or whitespace-only -> clear ValueError at load time
+    # (not a silent no-op sensor).
+    if setval is None:
+        monkeypatch.delenv("SC_CURATION_WATCH_DIR", raising=False)
+    else:
+        monkeypatch.setenv("SC_CURATION_WATCH_DIR", setval)
+    with pytest.raises(ValueError) as excinfo:
         S.build_curation_settings()
     assert "SC_CURATION_WATCH_DIR" in str(excinfo.value)
 

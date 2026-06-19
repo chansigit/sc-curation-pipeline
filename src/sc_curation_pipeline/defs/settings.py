@@ -39,13 +39,19 @@ class CurationSettings(dg.ConfigurableResource):
 def build_curation_settings() -> CurationSettings:
     """Construct CurationSettings from environment variables.
 
-    SC_CURATION_WATCH_DIR is required: read via os.environ so direct attribute
-    access returns the resolved string AND a missing value raises KeyError
-    loudly (spec §5.1 "missing -> clear error"). Optional fields fall back to
-    defaults via os.getenv with explicit casts.
+    SC_CURATION_WATCH_DIR is required and must be a non-empty path: a missing,
+    empty, or whitespace-only value raises a clear ValueError at load time
+    (spec §5.1 "missing -> clear error"), rather than silently producing a
+    sensor that never finds anything. Optional fields fall back to defaults.
     """
+    watch_dir = os.environ.get("SC_CURATION_WATCH_DIR", "").strip()
+    if not watch_dir:
+        raise ValueError(
+            "SC_CURATION_WATCH_DIR is required and must be a non-empty path "
+            "(set it in the environment or the project .env)."
+        )
     return CurationSettings(
-        watch_dir=os.environ["SC_CURATION_WATCH_DIR"],
+        watch_dir=watch_dir,
         done_marker=os.getenv("SC_CURATION_DONE_MARKER", ".done"),
         h5ad_glob=os.getenv("SC_CURATION_H5AD_GLOB", "*.h5ad"),
         scan_interval_sec=_env_int("SC_CURATION_SCAN_INTERVAL_SEC", 30),
