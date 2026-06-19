@@ -67,3 +67,27 @@ def make_sparse_counts():
         return sp.csr_matrix(dense), var_names
 
     return _make
+
+
+@pytest.fixture
+def write_adata():
+    """Write an h5ad with given X and optional layers/raw. Returns the path."""
+    def _make(path, X, *, var_names=None, layers=None, raw_X=None, raw_var_names=None):
+        n_obs, n_vars = X.shape
+        if var_names is None:
+            var_names = [f"GENE{i}" for i in range(n_vars)]
+        adata = ad.AnnData(X=X)
+        adata.var_names = list(var_names)
+        adata.obs_names = [f"cell{i}" for i in range(n_obs)]
+        if layers:
+            for k, v in layers.items():
+                adata.layers[k] = v
+        if raw_X is not None:
+            rv = raw_var_names or [f"GENE{i}" for i in range(raw_X.shape[1])]
+            raw = ad.AnnData(X=raw_X)
+            raw.var_names = list(rv)
+            adata.raw = raw
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        adata.write_h5ad(path)
+        return path
+    return _make

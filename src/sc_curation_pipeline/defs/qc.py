@@ -1,6 +1,5 @@
 import glob
 import os
-from datetime import datetime, timezone
 
 import dagster as dg
 import numpy as np
@@ -8,124 +7,61 @@ import scipy.sparse as sp
 import anndata as ad
 import h5py
 
+import stancounts
+
 from sc_curation_pipeline.defs.partitions import h5ad_partitions
 from sc_curation_pipeline.defs.settings import CurationSettings, path_for_partition_key
+from sc_curation_pipeline.defs.standardize import build_standardized_adata, write_standardized
 
 H5AD_PATH_TAG = "sc/h5ad_path"
 
 
-def compute_qc(path: str, memory_cap: int = 50_000_000) -> dict:
-    """Memory-aware QC on an .h5ad file.
+def compute_count_qc(counts, var_names) -> dict:
+    """QC metrics computed on an in-memory counts matrix (sparse or dense)."""
+    is_sparse = sp.issparse(counts)
+    C = counts.tocsr() if is_sparse else np.asarray(counts)
+    n_cells, n_vars = int(C.shape[0]), int(C.shape[1])
 
-    Structural metrics come from backed='r' (cheap). Count metrics are computed
-    in memory if n_obs*n_vars <= memory_cap, else X is streamed in row chunks.
-    Handles scipy sparse (CSR/CSC) and dense X.
-    """
-    st = os.stat(path)
-    out = {
-        "path": os.path.abspath(path),
-        "file_size_bytes": int(st.st_size),
-        "mtime": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+    up = np.char.upper(np.asarray([str(v) for v in var_names], dtype=str))
+    mito_mask = np.char.startswith(up, "MT-")
+    ribo_mask = np.char.startswith(up, "RPS") | np.char.startswith(up, "RPL")
+
+    if is_sparse:
+        counts_per_cell = np.asarray(C.sum(axis=1)).ravel().astype(np.float64)
+        genes_per_cell = C.getnnz(axis=1).astype(np.float64)
+        detected_per_gene = np.asarray(C.getnnz(axis=0)).ravel()
+        nnz_total = int(C.nnz)
+        mito_per_cell = (np.asarray(C[:, mito_mask].sum(axis=1)).ravel()
+                         if mito_mask.any() else np.zeros(n_cells))
+        ribo_per_cell = (np.asarray(C[:, ribo_mask].sum(axis=1)).ravel()
+                         if ribo_mask.any() else np.zeros(n_cells))
+    else:
+        counts_per_cell = C.sum(axis=1).astype(np.float64)
+        genes_per_cell = (C != 0).sum(axis=1).astype(np.float64)
+        detected_per_gene = (C != 0).sum(axis=0)
+        nnz_total = int((C != 0).sum())
+        mito_per_cell = C[:, mito_mask].sum(axis=1) if mito_mask.any() else np.zeros(n_cells)
+        ribo_per_cell = C[:, ribo_mask].sum(axis=1) if ribo_mask.any() else np.zeros(n_cells)
+
+    total = n_cells * n_vars
+    total_counts = float(counts_per_cell.sum())
+    n_genes_detected = int((np.asarray(detected_per_gene).ravel() > 0).sum())
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mito_pct_per_cell = np.where(counts_per_cell > 0,
+                                     100.0 * mito_per_cell / counts_per_cell, 0.0)
+    return {
+        "n_cells": n_cells,
+        "n_vars": n_vars,
+        "n_genes_detected": n_genes_detected,
+        "total_counts": total_counts,
+        "median_counts_per_cell": float(np.median(counts_per_cell)) if n_cells else 0.0,
+        "median_genes_per_cell": float(np.median(genes_per_cell)) if n_cells else 0.0,
+        "density": (nnz_total / total) if total else 0.0,
+        "sparsity": (1.0 - nnz_total / total) if total else 0.0,
+        "mito_pct": float(100.0 * mito_per_cell.sum() / total_counts) if total_counts else 0.0,
+        "ribo_pct": float(100.0 * ribo_per_cell.sum() / total_counts) if total_counts else 0.0,
+        "per_cell": {"counts": counts_per_cell, "genes": genes_per_cell, "mito_pct": mito_pct_per_cell},
     }
-
-    A = ad.read_h5ad(path, backed="r")
-    try:
-        n_cells, n_genes = int(A.n_obs), int(A.n_vars)
-        X = A.X
-        is_sparse = sp.issparse(X) or getattr(X, "format", None) in ("csr", "csc")
-
-        out.update({
-            "n_cells": n_cells,
-            "n_genes": n_genes,
-            "X_dtype": str(X.dtype),
-            "is_sparse": bool(is_sparse),
-            "has_raw": A.raw is not None,
-            "layers": list(A.layers.keys()),
-            "obsm": list(A.obsm.keys()),
-            "obsp": list(A.obsp.keys()),
-            "obs_columns": list(A.obs.columns),
-            "n_obs_columns": len(A.obs.columns),
-            "var_columns": list(A.var.columns),
-            "n_var_columns": len(A.var.columns),
-        })
-
-        up = A.var_names.astype(str).str.upper()
-        mito_mask = np.asarray(up.str.startswith("MT-"))
-        ribo_mask = np.asarray(up.str.startswith("RPS") | up.str.startswith("RPL"))
-
-        total_cells = n_cells * n_genes
-        counts_per_cell = np.zeros(n_cells, dtype=np.float64)
-        genes_per_cell = np.zeros(n_cells, dtype=np.float64)
-        mito_per_cell = np.zeros(n_cells, dtype=np.float64)
-        ribo_per_cell = np.zeros(n_cells, dtype=np.float64)
-        nnz_total = 0
-        is_integer = True
-
-        def _accumulate(block, start):
-            nonlocal nnz_total, is_integer
-            end = start + block.shape[0]
-            if sp.issparse(block):
-                block = block.tocsr()
-                counts_per_cell[start:end] = np.asarray(block.sum(axis=1)).ravel()
-                genes_per_cell[start:end] = block.getnnz(axis=1)
-                nnz_total += block.nnz
-                if mito_mask.any():
-                    mito_per_cell[start:end] = np.asarray(block[:, mito_mask].sum(axis=1)).ravel()
-                if ribo_mask.any():
-                    ribo_per_cell[start:end] = np.asarray(block[:, ribo_mask].sum(axis=1)).ravel()
-                if is_integer and block.nnz:
-                    d = block.data
-                    if not np.isfinite(d).all() or not np.allclose(d, np.round(d), rtol=0, atol=1e-6):
-                        is_integer = False
-            else:
-                block = np.asarray(block)
-                counts_per_cell[start:end] = block.sum(axis=1)
-                genes_per_cell[start:end] = (block != 0).sum(axis=1)
-                nnz_total += int((block != 0).sum())
-                if mito_mask.any():
-                    mito_per_cell[start:end] = block[:, mito_mask].sum(axis=1)
-                if ribo_mask.any():
-                    ribo_per_cell[start:end] = block[:, ribo_mask].sum(axis=1)
-                if is_integer and block.size:
-                    if not np.isfinite(block).all() or not np.allclose(block, np.round(block), rtol=0, atol=1e-6):
-                        is_integer = False
-
-        if total_cells <= memory_cap:
-            _accumulate(A.to_memory().X, 0)
-        else:
-            chunk = max(1, memory_cap // max(1, n_genes))
-            for start in range(0, n_cells, chunk):
-                stop = min(start + chunk, n_cells)
-                _accumulate(X[start:stop], start)
-
-        total_counts = float(counts_per_cell.sum())
-        out.update({
-            "total_counts": total_counts,
-            "median_counts_per_cell": float(np.median(counts_per_cell)) if n_cells else 0.0,
-            "median_genes_per_cell": float(np.median(genes_per_cell)) if n_cells else 0.0,
-            "density": (nnz_total / total_cells) if total_cells else 0.0,
-            "sparsity": (1.0 - nnz_total / total_cells) if total_cells else 0.0,
-            "mito_pct": (100.0 * mito_per_cell.sum() / total_counts) if total_counts else 0.0,
-            "ribo_pct": (100.0 * ribo_per_cell.sum() / total_counts) if total_counts else 0.0,
-            "is_raw_counts": bool(is_integer),
-        })
-
-        # Per-cell distributions for the inline QC plots. These arrays are already
-        # in memory (computed above, even in the streaming path), so exposing them
-        # costs nothing extra. mito% per cell guards the counts==0 rows -> 0.
-        with np.errstate(divide="ignore", invalid="ignore"):
-            mito_pct_per_cell = np.where(
-                counts_per_cell > 0, 100.0 * mito_per_cell / counts_per_cell, 0.0
-            )
-        out["per_cell"] = {
-            "counts": counts_per_cell,
-            "genes": genes_per_cell,
-            "mito_pct": mito_pct_per_cell,
-        }
-    finally:
-        if A.isbacked and A.file is not None:
-            A.file.close()
-    return out
 
 
 def resolve_h5ad_path(
@@ -176,113 +112,100 @@ def resolve_h5ad_path(
     return os.path.abspath(matches[0])
 
 
+def output_path_for(output_dir, partition_key, src_path) -> str:
+    """Mirror the sample's relative folder under output_dir (never the source)."""
+    rel_folder = path_for_partition_key(partition_key)
+    return os.path.join(output_dir, rel_folder, os.path.basename(src_path))
+
+
 @dg.asset(
     partitions_def=h5ad_partitions,
     group_name="curation",
-    check_specs=[
-        dg.AssetCheckSpec(name="min_cells", asset="h5ad_qc"),
-        dg.AssetCheckSpec(name="max_mito_pct", asset="h5ad_qc"),
-        dg.AssetCheckSpec(name="is_raw_counts", asset="h5ad_qc"),
-    ],
     retry_policy=dg.RetryPolicy(max_retries=2),
 )
 def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
-    """Lightweight QC on one sample's h5ad; results as metadata + checks."""
+    """Standardize one sample (counts layer + lognorm X), write it out, QC on counts."""
     path = resolve_h5ad_path(context, curation)
-    # A non-HDF5 file is corrupt/wrong, not a transient hiccup -> fail fast with a
-    # clear reason and DO NOT retry. h5py.is_hdf5 only checks the file signature,
-    # so it is cheap and deterministic.
     if not h5py.is_hdf5(path):
         raise dg.Failure(
             description=f"not a valid HDF5/h5ad file: {path!r} (file signature not found)",
-            metadata={
-                "partition": dg.MetadataValue.text(context.partition_key),
-                "h5ad_path": dg.MetadataValue.path(path),
-            },
+            metadata={"partition": dg.MetadataValue.text(context.partition_key),
+                      "h5ad_path": dg.MetadataValue.path(path)},
             allow_retries=False,
         )
     try:
-        qc = compute_qc(path)
-    except dg.Failure:
-        raise
-    except Exception as exc:  # valid HDF5 but read/QC failed -> may be transient I/O -> retriable
+        adata = ad.read_h5ad(path)
+    except Exception as exc:  # transient I/O on a valid HDF5 -> retriable
         raise dg.Failure(
-            description=f"failed to read/QC h5ad at {path!r}: {exc}",
-            metadata={
-                "partition": dg.MetadataValue.text(context.partition_key),
-                "h5ad_path": dg.MetadataValue.path(path),
-                "error": dg.MetadataValue.text(repr(exc)),
-            },
+            description=f"failed to read h5ad at {path!r}: {exc}",
+            metadata={"error": dg.MetadataValue.text(repr(exc))},
         )
 
-    # Inline QC plots are a presentation nicety: a rendering failure (or even a
-    # missing matplotlib) must NOT fail the run or gate the QC numbers/checks.
+    try:
+        res = stancounts.get_counts(adata)
+    except stancounts.CountsUnavailable as exc:
+        raise dg.Failure(
+            description=f"no recoverable counts for {path!r}: {exc}",
+            metadata={"h5ad_path": dg.MetadataValue.path(path)},
+            allow_retries=False,
+        )
+    counts, counts_source = res["counts"], res["source"]
+
+    qc = compute_count_qc(counts, adata.var_names)
+
+    if qc["n_cells"] < curation.min_cells:
+        raise dg.Failure(
+            description=f"rejected: n_cells {qc['n_cells']} < min_cells {curation.min_cells}",
+            metadata={"n_cells": dg.MetadataValue.int(qc["n_cells"]),
+                      "min_cells": dg.MetadataValue.int(curation.min_cells)},
+            allow_retries=False,
+        )
+    if qc["n_genes_detected"] < curation.min_genes:
+        raise dg.Failure(
+            description=f"rejected: n_genes_detected {qc['n_genes_detected']} < min_genes {curation.min_genes}",
+            metadata={"n_genes_detected": dg.MetadataValue.int(qc["n_genes_detected"]),
+                      "min_genes": dg.MetadataValue.int(curation.min_genes)},
+            allow_retries=False,
+        )
+
+    out_path = output_path_for(curation.output_dir, context.partition_key, path)
+    try:
+        std = build_standardized_adata(adata, counts)
+        write_standardized(std, out_path)
+    except Exception as exc:  # disk/write hiccup -> retriable
+        raise dg.Failure(
+            description=f"failed to write standardized h5ad to {out_path!r}: {exc}",
+            metadata={"error": dg.MetadataValue.text(repr(exc))},
+        )
+
     try:
         from sc_curation_pipeline.defs.plots import render_qc_panel
-
         pc = qc["per_cell"]
-        qc_plots = dg.MetadataValue.md(
-            render_qc_panel(
-                pc["counts"], pc["genes"], pc["mito_pct"],
-                sample_label=context.partition_key,
-            )
-        )
-    except Exception as exc:  # noqa: BLE001 - any plotting issue degrades gracefully
+        qc_plots = dg.MetadataValue.md(render_qc_panel(
+            pc["counts"], pc["genes"], pc["mito_pct"], sample_label=context.partition_key))
+    except Exception as exc:  # noqa: BLE001 - plotting is non-fatal
         context.log.warning(f"QC plot rendering failed: {exc!r}")
         qc_plots = dg.MetadataValue.md(f"⚠️ 图未生成: {exc}")
 
     yield dg.MaterializeResult(
         metadata={
+            "output_path": dg.MetadataValue.path(out_path),
+            "counts_source": dg.MetadataValue.text(counts_source),
+            "source_h5ad": dg.MetadataValue.path(path),
             "qc_plots": qc_plots,
-            "h5ad_path": dg.MetadataValue.path(str(qc["path"])),
-            "file_size_bytes": dg.MetadataValue.int(int(qc["file_size_bytes"])),
-            "mtime": dg.MetadataValue.text(str(qc["mtime"])),
-            "n_cells": dg.MetadataValue.int(int(qc["n_cells"])),
-            "n_genes": dg.MetadataValue.int(int(qc["n_genes"])),
-            "X_dtype": dg.MetadataValue.text(str(qc["X_dtype"])),
-            "is_sparse": dg.MetadataValue.bool(bool(qc["is_sparse"])),
-            "sparsity": dg.MetadataValue.float(float(qc["sparsity"])),
-            "density": dg.MetadataValue.float(float(qc["density"])),
-            "has_raw": dg.MetadataValue.bool(bool(qc["has_raw"])),
-            "layers": dg.MetadataValue.json(list(qc["layers"])),
-            "obsm": dg.MetadataValue.json(list(qc["obsm"])),
-            "obsp": dg.MetadataValue.json(list(qc["obsp"])),
-            "obs_columns": dg.MetadataValue.json(list(qc["obs_columns"])),
-            "n_obs_columns": dg.MetadataValue.int(int(qc["n_obs_columns"])),
-            "var_columns": dg.MetadataValue.json(list(qc["var_columns"])),
-            "n_var_columns": dg.MetadataValue.int(int(qc["n_var_columns"])),
-            "total_counts": dg.MetadataValue.float(float(qc["total_counts"])),
-            "median_counts_per_cell": dg.MetadataValue.float(float(qc["median_counts_per_cell"])),
-            "median_genes_per_cell": dg.MetadataValue.float(float(qc["median_genes_per_cell"])),
-            "mito_pct": dg.MetadataValue.float(float(qc["mito_pct"])),
-            "ribo_pct": dg.MetadataValue.float(float(qc["ribo_pct"])),
-            "is_raw_counts": dg.MetadataValue.bool(bool(qc["is_raw_counts"])),
+            "n_cells": dg.MetadataValue.int(qc["n_cells"]),
+            "n_genes_detected": dg.MetadataValue.int(qc["n_genes_detected"]),
+            "n_vars": dg.MetadataValue.int(qc["n_vars"]),
+            "total_counts": dg.MetadataValue.float(qc["total_counts"]),
+            "median_counts_per_cell": dg.MetadataValue.float(qc["median_counts_per_cell"]),
+            "median_genes_per_cell": dg.MetadataValue.float(qc["median_genes_per_cell"]),
+            "density": dg.MetadataValue.float(qc["density"]),
+            "sparsity": dg.MetadataValue.float(qc["sparsity"]),
+            "mito_pct": dg.MetadataValue.float(qc["mito_pct"]),
+            "ribo_pct": dg.MetadataValue.float(qc["ribo_pct"]),
+            "layers": dg.MetadataValue.json(list(std.layers.keys())),
+            "obsm": dg.MetadataValue.json(list(std.obsm.keys())),
         }
-    )
-
-    yield dg.AssetCheckResult(
-        passed=bool(qc["n_cells"] >= curation.min_cells),
-        check_name="min_cells",
-        severity=dg.AssetCheckSeverity.ERROR,
-        metadata={
-            "n_cells": dg.MetadataValue.int(int(qc["n_cells"])),
-            "min_cells": dg.MetadataValue.int(int(curation.min_cells)),
-        },
-    )
-    yield dg.AssetCheckResult(
-        passed=bool(qc["mito_pct"] <= curation.max_mito_pct),
-        check_name="max_mito_pct",
-        severity=dg.AssetCheckSeverity.ERROR,
-        metadata={
-            "mito_pct": dg.MetadataValue.float(float(qc["mito_pct"])),
-            "max_mito_pct": dg.MetadataValue.float(float(curation.max_mito_pct)),
-        },
-    )
-    yield dg.AssetCheckResult(
-        passed=bool(qc["is_raw_counts"]),
-        check_name="is_raw_counts",
-        severity=dg.AssetCheckSeverity.ERROR,
-        metadata={"is_raw_counts": dg.MetadataValue.bool(bool(qc["is_raw_counts"]))},
     )
 
 
