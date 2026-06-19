@@ -66,3 +66,14 @@ def test_watch_dir_missing_raises(monkeypatch):
     with pytest.raises(KeyError) as excinfo:
         S.build_curation_settings()
     assert "SC_CURATION_WATCH_DIR" in str(excinfo.value)
+
+
+def test_malformed_numeric_env_degrades_to_default(monkeypatch):
+    monkeypatch.setenv("SC_CURATION_WATCH_DIR", "/w")
+    monkeypatch.setenv("SC_CURATION_SCAN_INTERVAL_SEC", "")    # empty
+    monkeypatch.setenv("SC_CURATION_MIN_CELLS", "abc")        # invalid
+    monkeypatch.setenv("SC_CURATION_MAX_MITO_PCT", "")        # empty
+    cs = S.build_curation_settings()
+    assert cs.scan_interval_sec == 30
+    assert cs.min_cells == 100
+    assert cs.max_mito_pct == 20.0

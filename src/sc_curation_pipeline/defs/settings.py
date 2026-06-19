@@ -3,6 +3,28 @@ import os
 import dagster as dg
 
 
+def _env_int(name: str, default: int) -> int:
+    """Int from env, robust to empty/invalid values (-> default)."""
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    """Float from env, robust to empty/invalid values (-> default)."""
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 class CurationSettings(dg.ConfigurableResource):
     """Env-driven configuration for the h5ad QC pipeline."""
 
@@ -26,9 +48,9 @@ def build_curation_settings() -> CurationSettings:
         watch_dir=os.environ["SC_CURATION_WATCH_DIR"],
         done_marker=os.getenv("SC_CURATION_DONE_MARKER", ".done"),
         h5ad_glob=os.getenv("SC_CURATION_H5AD_GLOB", "*.h5ad"),
-        scan_interval_sec=int(os.getenv("SC_CURATION_SCAN_INTERVAL_SEC", "30")),
-        min_cells=int(os.getenv("SC_CURATION_MIN_CELLS", "100")),
-        max_mito_pct=float(os.getenv("SC_CURATION_MAX_MITO_PCT", "20")),
+        scan_interval_sec=_env_int("SC_CURATION_SCAN_INTERVAL_SEC", 30),
+        min_cells=_env_int("SC_CURATION_MIN_CELLS", 100),
+        max_mito_pct=_env_float("SC_CURATION_MAX_MITO_PCT", 20.0),
     )
 
 

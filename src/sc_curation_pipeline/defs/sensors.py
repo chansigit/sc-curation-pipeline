@@ -7,10 +7,21 @@ from sc_curation_pipeline.defs.partitions import h5ad_partitions
 from sc_curation_pipeline.defs.qc import H5AD_PATH_TAG, h5ad_qc_job
 from sc_curation_pipeline.defs.settings import CurationSettings, partition_key_for
 
-# Fallback tick interval used only when SC_CURATION_SCAN_INTERVAL_SEC is unset.
-# The decorator's minimum_interval_seconds is read from the env at import time;
-# the resource's scan_interval_sec field is then purely informational.
+# Fallback tick interval used when SC_CURATION_SCAN_INTERVAL_SEC is unset or invalid.
+# The decorator's minimum_interval_seconds is read from the env at import time via
+# _interval_seconds(); the resource's scan_interval_sec field is purely informational.
 _DEFAULT_INTERVAL_SEC = 30
+
+
+def _interval_seconds() -> int:
+    """Tick interval from env, robust to empty/invalid values (-> default)."""
+    raw = os.getenv("SC_CURATION_SCAN_INTERVAL_SEC")
+    if raw is None or raw == "":
+        return _DEFAULT_INTERVAL_SEC
+    try:
+        return int(raw)
+    except ValueError:
+        return _DEFAULT_INTERVAL_SEC
 
 
 def discover_samples(
@@ -39,9 +50,7 @@ def discover_samples(
 
 @dg.sensor(
     job=h5ad_qc_job,
-    minimum_interval_seconds=int(
-        os.getenv("SC_CURATION_SCAN_INTERVAL_SEC", str(_DEFAULT_INTERVAL_SEC))
-    ),
+    minimum_interval_seconds=_interval_seconds(),
     default_status=dg.DefaultSensorStatus.STOPPED,
 )
 def watch_h5ad_dir(

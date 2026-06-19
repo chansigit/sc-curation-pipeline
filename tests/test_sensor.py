@@ -147,3 +147,15 @@ def test_registration_bundles_everything(monkeypatch):
     assert "h5ad_qc" in keys
     assert "curation" in d.resources
     assert d.get_sensor_def("watch_h5ad_dir") is not None
+
+
+def test_interval_seconds_robust(monkeypatch):
+    from sc_curation_pipeline.defs import sensors as sn
+    monkeypatch.delenv("SC_CURATION_SCAN_INTERVAL_SEC", raising=False)
+    assert sn._interval_seconds() == 30
+    monkeypatch.setenv("SC_CURATION_SCAN_INTERVAL_SEC", "")
+    assert sn._interval_seconds() == 30
+    monkeypatch.setenv("SC_CURATION_SCAN_INTERVAL_SEC", "45")
+    assert sn._interval_seconds() == 45
+    monkeypatch.setenv("SC_CURATION_SCAN_INTERVAL_SEC", "bad")
+    assert sn._interval_seconds() == 30

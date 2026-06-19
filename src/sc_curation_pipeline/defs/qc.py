@@ -74,7 +74,7 @@ def compute_qc(path: str, memory_cap: int = 50_000_000) -> dict:
                     ribo_per_cell[start:end] = np.asarray(block[:, ribo_mask].sum(axis=1)).ravel()
                 if is_integer and block.nnz:
                     d = block.data
-                    if not np.allclose(d, np.round(d), atol=1e-6):
+                    if not np.isfinite(d).all() or not np.allclose(d, np.round(d), rtol=0, atol=1e-6):
                         is_integer = False
             else:
                 block = np.asarray(block)
@@ -86,7 +86,7 @@ def compute_qc(path: str, memory_cap: int = 50_000_000) -> dict:
                 if ribo_mask.any():
                     ribo_per_cell[start:end] = block[:, ribo_mask].sum(axis=1)
                 if is_integer and block.size:
-                    if not np.allclose(block, np.round(block), atol=1e-6):
+                    if not np.isfinite(block).all() or not np.allclose(block, np.round(block), rtol=0, atol=1e-6):
                         is_integer = False
 
         if total_cells <= memory_cap:
@@ -187,7 +187,6 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
                 "h5ad_path": dg.MetadataValue.path(path),
                 "error": dg.MetadataValue.text(repr(exc)),
             },
-            allow_retries=False,
         )
 
     yield dg.MaterializeResult(

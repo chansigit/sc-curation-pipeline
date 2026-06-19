@@ -207,3 +207,51 @@ def test_h5ad_qc_missing_watch_dir_raises(tmp_path):
 
 def test_h5ad_qc_job_targets_asset():
     assert h5ad_qc_job.name == "h5ad_qc_job"
+
+
+def test_compute_qc_large_noninteger_not_raw(tmp_path, h5ad_writer):
+    import numpy as np
+    X = np.array([[60274.35, 159721.49], [80000.5, 99999.99]], dtype=np.float64)
+    path = h5ad_writer(str(tmp_path / "big" / "b.h5ad"), X, var_names=["GENE0", "GENE1"])
+    assert compute_qc(path)["is_raw_counts"] is False
+
+
+def test_compute_qc_large_integers_are_raw(tmp_path, h5ad_writer):
+    import numpy as np
+    X = np.array([[1_000_000.0, 2_500_000.0], [3_000_000.0, 0.0]], dtype=np.float64)
+    path = h5ad_writer(str(tmp_path / "bigint" / "b.h5ad"), X, var_names=["GENE0", "GENE1"])
+    assert compute_qc(path)["is_raw_counts"] is True
+
+
+def test_compute_qc_inf_not_raw(tmp_path, h5ad_writer):
+    import numpy as np
+    X = np.array([[1.0, 2.0], [3.0, np.inf]], dtype=np.float64)
+    path = h5ad_writer(str(tmp_path / "inf" / "b.h5ad"), X, var_names=["GENE0", "GENE1"])
+    assert compute_qc(path)["is_raw_counts"] is False
+
+
+def test_h5ad_qc_transient_error_is_retried(tmp_path, monkeypatch):
+    # Regression for BUG 2: a transient (non-Failure) read error must be retried
+    # by RetryPolicy(max_retries=2); previously allow_retries=False suppressed it.
+    from sc_curation_pipeline.defs import qc as qcmod
+    watch = str(tmp_path / "watch")
+    folder = os.path.join(watch, "flaky")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, "f.h5ad")
+    open(path, "wb").close()
+    key = partition_key_for(watch, folder)
+    settings = CurationSettings(watch_dir=watch)
+    calls = []
+    def boom(p, *a, **k):
+        calls.append(p)
+        raise OSError("transient lustre hiccup")
+    monkeypatch.setattr(qcmod, "compute_qc", boom)
+    instance = dg.DagsterInstance.ephemeral()
+    instance.add_dynamic_partitions(h5ad_partitions.name, [key])
+    result = dg.materialize(
+        [qcmod.h5ad_qc], partition_key=key, instance=instance,
+        resources={"curation": settings},
+        tags={"sc/h5ad_path": path}, raise_on_error=False,
+    )
+    assert result.success is False
+    assert len(calls) == 3  # initial + 2 retries
