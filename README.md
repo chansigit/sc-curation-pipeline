@@ -153,6 +153,13 @@ ngrok http 3000 --domain=csj.ngrok.io --basic-auth "你:一个强密码"
 ```
 然后任意地方浏览器打开 https://csj.ngrok.io 。
 
+或用仓库里的脚本(配置走 `SC_UI_PORT` / `SC_UI_NGROK_DOMAIN` / `SC_UI_BASIC_AUTH` 环境变量):
+```bash
+SC_UI_BASIC_AUTH="csj:一个强密码" scripts/ui-tunnel.sh up   # 启动(后台)
+scripts/ui-tunnel.sh status                                # 看状态 + 公网 URL
+scripts/ui-tunnel.sh down                                  # 断开
+```
+
 > ⚠️ 注意:
 > - **Dagster UI 默认没有登录认证**,而它能触发/取消 run(等于在集群上跑代码)。公开到公网前**务必加 `--basic-auth`(或 `--oauth`)**,否则拿到 URL 的人就能操作你的 pipeline;用完 `Ctrl-C` 关掉隧道。
 > - 从共享 HPC 对公网暴露服务,请确认符合 Stanford SRC 使用规范。
