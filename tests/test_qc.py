@@ -83,6 +83,8 @@ def test_compute_qc_streaming_matches_inmemory(tmp_path, h5ad_writer, make_spars
     assert streamed["median_counts_per_cell"] == full["median_counts_per_cell"]
     assert streamed["median_genes_per_cell"] == full["median_genes_per_cell"]
     assert abs(streamed["mito_pct"] - full["mito_pct"]) < 1e-9
+    assert streamed["density"] == full["density"]
+    assert streamed["sparsity"] == full["sparsity"]
 
 
 def test_partitions_def_name():
@@ -94,7 +96,6 @@ def test_partitions_def_name():
 import os
 
 import dagster as dg
-import pytest
 
 from sc_curation_pipeline.defs.qc import h5ad_qc, h5ad_qc_job  # noqa: E402
 from sc_curation_pipeline.defs.settings import CurationSettings, partition_key_for  # noqa: E402

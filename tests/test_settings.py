@@ -51,6 +51,16 @@ def test_sanitize_key_single_level():
     assert S.path_for_partition_key(key) == "foo"
 
 
+def test_sanitize_key_no_collision():
+    # A nested path and a flat folder literally containing the separator must
+    # NOT collapse to the same partition key (silent sample loss).
+    k_nested = S.partition_key_for("/watch", "/watch/GSE1/sampleB")
+    k_flat = S.partition_key_for("/watch", "/watch/GSE1__sampleB")
+    assert k_nested != k_flat
+    assert S.path_for_partition_key(k_nested) == "GSE1/sampleB"
+    assert S.path_for_partition_key(k_flat) == "GSE1__sampleB"
+
+
 def test_watch_dir_missing_raises(monkeypatch):
     monkeypatch.delenv("SC_CURATION_WATCH_DIR", raising=False)
     with pytest.raises(KeyError) as excinfo:

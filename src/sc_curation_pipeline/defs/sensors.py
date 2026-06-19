@@ -57,6 +57,11 @@ def watch_h5ad_dir(
     if not discovered:
         return dg.SkipReason(f"no completed samples under {curation.watch_dir}")
 
+    # Dedup on partition existence (not submitted-run state). Trade-off: if the
+    # daemon registers a partition then crashes before submitting its RunRequest,
+    # that sample is skipped on later ticks (visible-but-unmaterialized in the UI;
+    # recoverable via manual re-materialize). Acceptable for dev; revisit for the
+    # production daemon (spec §10).
     new = [
         (key, path)
         for key, path in discovered

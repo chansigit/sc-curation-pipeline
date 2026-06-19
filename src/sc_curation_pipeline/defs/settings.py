@@ -2,10 +2,6 @@ import os
 
 import dagster as dg
 
-# Partition keys must avoid Dagster-illegal characters (path separators).
-# We encode the relative folder path by replacing "/" with this token.
-_SEP_TOKEN = "__"
-
 
 class CurationSettings(dg.ConfigurableResource):
     """Env-driven configuration for the h5ad QC pipeline."""
@@ -37,13 +33,20 @@ def build_curation_settings() -> CurationSettings:
 
 
 def sanitize_key(rel_path: str) -> str:
-    """Turn a relative POSIX folder path into a Dagster-legal partition key."""
-    return rel_path.strip("/").replace("/", _SEP_TOKEN)
+    """Encode a relative POSIX folder path into a Dagster-legal partition key.
+
+    Reversible and injective: the escape char is "_" (literal "_" -> "_U"),
+    and the path separator "/" -> "_S". Because every literal underscore is
+    escaped before slashes are encoded, distinct paths can never collide
+    (e.g. nested "GSE1/sampleB" -> "GSE1_SsampleB" vs a flat folder literally
+    named "GSE1__sampleB" -> "GSE1_U_UsampleB").
+    """
+    return rel_path.strip("/").replace("_", "_U").replace("/", "_S")
 
 
 def path_for_partition_key(key: str) -> str:
-    """Reverse sanitize_key back to a relative POSIX path (display only)."""
-    return key.replace(_SEP_TOKEN, "/")
+    """Reverse sanitize_key back to a relative POSIX path (decode _S then _U)."""
+    return key.replace("_S", "/").replace("_U", "_")
 
 
 def partition_key_for(watch_dir: str, folder: str) -> str:
