@@ -143,6 +143,21 @@ ssh -L 3000:<计算节点名, 如 sh02-06n11>:3000 <你的SUNet>@login.sherlock.
 # 然后浏览器打开 http://localhost:3000
 ```
 
+**(或)用 ngrok 暴露到固定域名** —— 不想每次 SSH 转发的话,在**同一个计算节点**上另开一个终端跑(`dg dev` 继续开着):
+```bash
+# authtoken 一次性配置(~/.config/ngrok/ngrok.yml 里已有则跳过):
+# ngrok config add-authtoken <你的token>
+
+# 给 UI 加一层认证(强烈建议!),再暴露到你的固定域名:
+ngrok http 3000 --domain=csj.ngrok.io --basic-auth "你:一个强密码"
+```
+然后任意地方浏览器打开 https://csj.ngrok.io 。
+
+> ⚠️ 注意:
+> - **Dagster UI 默认没有登录认证**,而它能触发/取消 run(等于在集群上跑代码)。公开到公网前**务必加 `--basic-auth`(或 `--oauth`)**,否则拿到 URL 的人就能操作你的 pipeline;用完 `Ctrl-C` 关掉隧道。
+> - 从共享 HPC 对公网暴露服务,请确认符合 Stanford SRC 使用规范。
+> - 小坑:ngrok 域名 DNS 会先给 IPv6(本节点 IPv6 不通),ngrok 自动回退 IPv4(已验证可连);隧道起得慢等几秒即可。
+
 **打开 sensor**:UI 里 **Automation → `watch_h5ad_dir`**,开关拨到 **ON**(它默认是 `STOPPED`,不打开不会扫描)。
 
 ---
