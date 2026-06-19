@@ -15,13 +15,15 @@ def settings_factory(tmp_path):
     def _make(**overrides):
         watch = overrides.pop("watch_dir", str(tmp_path / "watch"))
         Path(watch).mkdir(parents=True, exist_ok=True)
+        out = overrides.pop("output_dir", str(tmp_path / "out"))
         kwargs = dict(
             watch_dir=watch,
+            output_dir=out,
             done_marker=".done",
             h5ad_glob="*.h5ad",
             scan_interval_sec=30,
             min_cells=100,
-            max_mito_pct=20.0,
+            min_genes=5000,
         )
         kwargs.update(overrides)
         return CurationSettings(**kwargs)

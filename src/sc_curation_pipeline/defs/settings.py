@@ -14,26 +14,16 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _env_float(name: str, default: float) -> float:
-    """Float from env, robust to empty/invalid values (-> default)."""
-    raw = os.getenv(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        return default
-
-
 class CurationSettings(dg.ConfigurableResource):
-    """Env-driven configuration for the h5ad QC pipeline."""
+    """Env-driven configuration for the h5ad curation + QC pipeline."""
 
     watch_dir: str
+    output_dir: str
     done_marker: str = ".done"
     h5ad_glob: str = "*.h5ad"
     scan_interval_sec: int = 30
     min_cells: int = 100
-    max_mito_pct: float = 20.0
+    min_genes: int = 5000
 
 
 def build_curation_settings() -> CurationSettings:
@@ -42,7 +32,9 @@ def build_curation_settings() -> CurationSettings:
     SC_CURATION_WATCH_DIR is required and must be a non-empty path: a missing,
     empty, or whitespace-only value raises a clear ValueError at load time
     (spec §5.1 "missing -> clear error"), rather than silently producing a
-    sensor that never finds anything. Optional fields fall back to defaults.
+    sensor that never finds anything. SC_CURATION_OUTPUT_DIR is also required
+    (the standardized .h5ad output directory). Optional fields fall back to
+    defaults.
     """
     watch_dir = os.environ.get("SC_CURATION_WATCH_DIR", "").strip()
     if not watch_dir:
@@ -50,13 +42,20 @@ def build_curation_settings() -> CurationSettings:
             "SC_CURATION_WATCH_DIR is required and must be a non-empty path "
             "(set it in the environment or the project .env)."
         )
+    output_dir = os.environ.get("SC_CURATION_OUTPUT_DIR", "").strip()
+    if not output_dir:
+        raise ValueError(
+            "SC_CURATION_OUTPUT_DIR is required and must be a non-empty path "
+            "(the standardized .h5ad output directory; never the source dir)."
+        )
     return CurationSettings(
         watch_dir=watch_dir,
+        output_dir=output_dir,
         done_marker=os.getenv("SC_CURATION_DONE_MARKER", ".done"),
         h5ad_glob=os.getenv("SC_CURATION_H5AD_GLOB", "*.h5ad"),
         scan_interval_sec=_env_int("SC_CURATION_SCAN_INTERVAL_SEC", 30),
         min_cells=_env_int("SC_CURATION_MIN_CELLS", 100),
-        max_mito_pct=_env_float("SC_CURATION_MAX_MITO_PCT", 20.0),
+        min_genes=_env_int("SC_CURATION_MIN_GENES", 5000),
     )
 
 
