@@ -236,6 +236,64 @@ def test_compute_qc_inf_not_raw(tmp_path, h5ad_writer):
     assert compute_qc(path)["is_raw_counts"] is False
 
 
+def test_compute_qc_returns_per_cell_arrays(tmp_path, h5ad_writer):
+    # The inline plots consume qc["per_cell"]; verify the arrays exist and are
+    # correct for a known dense matrix (MT-CO1 is the mito gene).
+    X = np.array([[1.0, 0.0, 2.0], [0.0, 3.0, 0.0]], dtype=np.float32)
+    path = h5ad_writer(str(tmp_path / "pc" / "x.h5ad"), X,
+                       var_names=["GENE0", "MT-CO1", "RPS3"])
+    pc = compute_qc(path)["per_cell"]
+    assert np.array_equal(pc["counts"], np.array([3.0, 3.0]))
+    assert np.array_equal(pc["genes"], np.array([2.0, 1.0]))
+    # cell0: 0/3 -> 0%, cell1: 3/3 -> 100%
+    assert np.allclose(pc["mito_pct"], np.array([0.0, 100.0]))
+
+
+def test_h5ad_qc_materialize_includes_qc_plots(tmp_path, h5ad_writer, make_sparse_counts):
+    watch = str(tmp_path / "watch")
+    folder = os.path.join(watch, "plots_sample")
+    X, var_names = make_sparse_counts(n_obs=150, n_vars=10, seed=7)
+    path = h5ad_writer(os.path.join(folder, "a.h5ad"), X, var_names=var_names)
+    key = partition_key_for(watch, folder)
+    settings = CurationSettings(watch_dir=watch, min_cells=100, max_mito_pct=90.0)
+
+    instance = dg.DagsterInstance.ephemeral()
+    instance.add_dynamic_partitions(h5ad_partitions.name, [key])
+    result = _materialize(path, watch, key, settings, instance)
+    assert result.success
+
+    md = result.asset_materializations_for_node("h5ad_qc")[0].metadata
+    assert "qc_plots" in md
+    assert "data:image/png;base64," in md["qc_plots"].value
+
+
+def test_h5ad_qc_plot_failure_is_non_fatal(tmp_path, monkeypatch, h5ad_writer, make_sparse_counts):
+    # A plotting error must NOT fail the run: numbers + checks still produced, and
+    # qc_plots carries a graceful note instead of an image.
+    from sc_curation_pipeline.defs import plots as plotsmod
+    watch = str(tmp_path / "watch")
+    folder = os.path.join(watch, "plotfail")
+    X, var_names = make_sparse_counts(n_obs=150, n_vars=10, seed=8)
+    path = h5ad_writer(os.path.join(folder, "a.h5ad"), X, var_names=var_names)
+    key = partition_key_for(watch, folder)
+    settings = CurationSettings(watch_dir=watch, min_cells=100, max_mito_pct=90.0)
+
+    def boom(*a, **k):
+        raise RuntimeError("matplotlib exploded")
+    monkeypatch.setattr(plotsmod, "render_qc_panel", boom)
+
+    instance = dg.DagsterInstance.ephemeral()
+    instance.add_dynamic_partitions(h5ad_partitions.name, [key])
+    result = _materialize(path, watch, key, settings, instance)
+    assert result.success is True  # plot failure is non-fatal
+    assert not result.is_node_failed("h5ad_qc")
+
+    md = result.asset_materializations_for_node("h5ad_qc")[0].metadata
+    assert md["n_cells"].value == 150  # numbers intact
+    assert "图未生成" in md["qc_plots"].value
+    assert "matplotlib exploded" in md["qc_plots"].value
+
+
 def test_h5ad_qc_transient_error_is_retried(tmp_path, monkeypatch, h5ad_writer):
     # Regression for BUG 2: a transient (non-Failure) read error on a VALID h5ad
     # must be retried by RetryPolicy(max_retries=2). The file is a real HDF5 so it

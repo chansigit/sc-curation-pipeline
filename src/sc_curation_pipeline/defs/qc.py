@@ -109,6 +109,19 @@ def compute_qc(path: str, memory_cap: int = 50_000_000) -> dict:
             "ribo_pct": (100.0 * ribo_per_cell.sum() / total_counts) if total_counts else 0.0,
             "is_raw_counts": bool(is_integer),
         })
+
+        # Per-cell distributions for the inline QC plots. These arrays are already
+        # in memory (computed above, even in the streaming path), so exposing them
+        # costs nothing extra. mito% per cell guards the counts==0 rows -> 0.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            mito_pct_per_cell = np.where(
+                counts_per_cell > 0, 100.0 * mito_per_cell / counts_per_cell, 0.0
+            )
+        out["per_cell"] = {
+            "counts": counts_per_cell,
+            "genes": genes_per_cell,
+            "mito_pct": mito_pct_per_cell,
+        }
     finally:
         if A.isbacked and A.file is not None:
             A.file.close()
@@ -202,8 +215,25 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
             },
         )
 
+    # Inline QC plots are a presentation nicety: a rendering failure (or even a
+    # missing matplotlib) must NOT fail the run or gate the QC numbers/checks.
+    try:
+        from sc_curation_pipeline.defs.plots import render_qc_panel
+
+        pc = qc["per_cell"]
+        qc_plots = dg.MetadataValue.md(
+            render_qc_panel(
+                pc["counts"], pc["genes"], pc["mito_pct"],
+                sample_label=context.partition_key,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - any plotting issue degrades gracefully
+        context.log.warning(f"QC plot rendering failed: {exc!r}")
+        qc_plots = dg.MetadataValue.md(f"⚠️ 图未生成: {exc}")
+
     yield dg.MaterializeResult(
         metadata={
+            "qc_plots": qc_plots,
             "h5ad_path": dg.MetadataValue.path(str(qc["path"])),
             "file_size_bytes": dg.MetadataValue.int(int(qc["file_size_bytes"])),
             "mtime": dg.MetadataValue.text(str(qc["mtime"])),
