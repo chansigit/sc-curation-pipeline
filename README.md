@@ -28,7 +28,8 @@ $SC_CURATION_WATCH_DIR/   (可配置, 在 $SCRATCH 下, 递归扫描)
 ```
 
 - **打不开 / 损坏 / 缺文件** → 该分区的 run **变红**(`dagster.Failure`),失败原因在 metadata 里。
-- **QC 不达标**(细胞太少 / mito% 过高 / 不是原始 counts)→ 对应 **check 变红,但 run 仍为绿**(方便你照常看指标做分诊)。
+- **未达到硬性阈值**(细胞数 < `SC_CURATION_MIN_CELLS` 或基因数 < `SC_CURATION_MIN_GENES`)→ run **变红**(`dagster.Failure`),**不写输出文件**。
+- **通过阈值** → run 变绿,标准化 `.h5ad` 写入 `SC_CURATION_OUTPUT_DIR`,QC metadata 在 Asset UI 里可查。
 
 ---
 
@@ -86,11 +87,12 @@ uv pip install -p /scratch/users/chensj16/venvs/dl2025/.venv/bin/python \
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `SC_CURATION_WATCH_DIR` | **(必填)** | 要监控的根目录(放在 `$SCRATCH` 下) |
+| `SC_CURATION_OUTPUT_DIR` | **(必填)** | 标准化 `.h5ad` 的输出目录(写入 `$SCRATCH` 下) |
 | `SC_CURATION_DONE_MARKER` | `.done` | 上传完成标记文件名 |
 | `SC_CURATION_H5AD_GLOB` | `*.h5ad` | 文件夹内匹配 h5ad 的模式 |
 | `SC_CURATION_SCAN_INTERVAL_SEC` | `30` | sensor 最小扫描间隔(秒;在 `dg dev` 启动时读取) |
-| `SC_CURATION_MIN_CELLS` | `100` | check:细胞数下限 |
-| `SC_CURATION_MAX_MITO_PCT` | `20` | check:中位 mito% 上限 |
+| `SC_CURATION_MIN_CELLS` | `100` | 硬性阈值:细胞数低于此值快速失败(无输出) |
+| `SC_CURATION_MIN_GENES` | `5000` | 硬性阈值:基因数中位低于此值快速失败(无输出) |
 
 `SC_CURATION_WATCH_DIR` 是必填的——没设会立刻报错(注册资源时就要读它)。可选变量留空或写成非法值会**安全退回默认值**(不会让服务崩溃)。
 
@@ -107,8 +109,9 @@ cp .env.example .env        # 然后编辑 .env,至少填好 SC_CURATION_WATCH_D
 `.env` 已在 `.gitignore` 里、不会被提交。内容示例:
 ```dotenv
 SC_CURATION_WATCH_DIR=/scratch/users/chensj16/sc-curation-watch
+SC_CURATION_OUTPUT_DIR=/scratch/users/chensj16/sc-curation-output
 SC_CURATION_MIN_CELLS=200
-SC_CURATION_MAX_MITO_PCT=15
+SC_CURATION_MIN_GENES=5000
 # 其余不写就用默认值
 ```
 
@@ -202,9 +205,10 @@ touch "$SC_CURATION_WATCH_DIR/demo_sample/.done"
 
 - 一个 tick(≤30s)内,sensor 注册分区 `demo_sample` 并触发一次 `h5ad_qc` run。
 - 在 UI **Assets → `h5ad_qc` → 选 `demo_sample` 分区**,可以看到:
-  - **Metadata**:`n_cells` / `n_genes` / `mito_pct` / `ribo_pct` / `total_counts` / `sparsity` / `is_raw_counts` / `obs_columns` / 文件大小、路径 等。
-  - **Checks**:`min_cells` / `max_mito_pct` / `is_raw_counts` 的绿 / 红。
-- 试验失败路径:放一个损坏的 h5ad(+ `.done`)→ 那个分区的 run 变红,原因写在 metadata。
+  - **Metadata**:`n_cells` / `n_genes` / `mito_pct` / `ribo_pct` / `total_counts` / `sparsity` / `obs_columns` / 文件大小、路径、counts 来源等。
+  - **Checks**:`min_cells` / `min_genes` 的绿 / 红。
+  - 通过阈值后,标准化 `.h5ad` 写入 `SC_CURATION_OUTPUT_DIR`。
+- 试验失败路径:放一个损坏的 h5ad(+ `.done`)→ 那个分区的 run 变红,原因写在 metadata;或用低细胞数样本触发硬性阈值快速失败。
 
 ---
 
@@ -212,9 +216,30 @@ touch "$SC_CURATION_WATCH_DIR/demo_sample/.done"
 
 - **结构**:`n_cells`、`n_genes`、`X_dtype`、`is_sparse` / `density` / `sparsity`、`has_raw`、`layers` / `obsm` / `obsp`、`obs_columns` / `var_columns`。
 - **计数**:`total_counts`、每细胞中位 `counts` / `genes`、`mito_pct`(`MT-` 基因)、`ribo_pct`(`RPS` / `RPL`)。
-- **判定**:`is_raw_counts`(X 是否近似整数 → 原始 counts vs 已归一化)。
 - **文件**:大小、mtime、路径。
-- **asset checks(阈值可配)**:`min_cells`、`max_mito_pct`、`is_raw_counts`。
+- **asset checks(硬性阈值)**:`min_cells`(细胞数)、`min_genes`(基因数中位)。
+
+### 标准化输出(`h5ad_qc` step 新增)
+
+通过 QC 硬性阈值的样本,`h5ad_qc` 会把原始对象标准化后写成一个新 `.h5ad` 到 `SC_CURATION_OUTPUT_DIR`(文件名由样本分区键自动生成)。
+
+**标准化规则:**
+
+- `layers["counts"]` — 原始整数 counts(来源优先顺序:输入 `layers["counts"]` → 矩阵 `X` → `.raw.X` → 由 stancounts `get_counts()` 自动恢复)
+- `X` — 对 counts 做 `normalize_total(target_sum=1e4)` + `log1p` 的归一化结果
+- velocity 相关 layers(`spliced` / `unspliced` / `ambiguous` 等)原样保留到输出
+- `obs` / `var` / `obsm` / `obsp` 保持不变
+
+**硬性快速失败(fast-fail)阈值:**
+
+| 变量 | 默认 | 含义 |
+|---|---|---|
+| `SC_CURATION_MIN_CELLS` | `100` | 细胞数低于此值 → run 立即失败,**不写输出文件** |
+| `SC_CURATION_MIN_GENES` | `5000` | 每细胞检出基因数中位低于此值 → run 立即失败,**不写输出文件** |
+
+未达到阈值的样本以 `dagster.Failure` 快速失败,原因写入 run 日志和 metadata——不会留下半截写好的文件。
+
+**已移除的配置项:**`max_mito_pct` 和 `is_raw_counts` 不再作为检查阈值(mito% 仍作为 QC metadata 计算并展示,但不触发 check)。
 
 ---
 
