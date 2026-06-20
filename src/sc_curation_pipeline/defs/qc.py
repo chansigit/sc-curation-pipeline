@@ -170,7 +170,7 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
 
     out_path = output_path_for(curation.output_dir, context.partition_key, path)
     try:
-        std = build_standardized_adata(adata, counts)
+        std = build_standardized_adata(adata, counts, source=counts_source)
         write_standardized(std, out_path)
     except Exception as exc:  # disk/write hiccup -> retriable
         raise dg.Failure(

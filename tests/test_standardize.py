@@ -27,6 +27,21 @@ def test_build_sets_counts_layer_and_lognorm_X():
     assert "spliced" in out.layers  # velocity preserved
 
 
+def test_build_renames_source_layer():
+    # counts coming from a non-"counts" layer (e.g. raw_counts) must be RENAMED to
+    # "counts" — the old name is dropped so counts is not stored twice; velocity
+    # and other layers are left untouched.
+    counts = _counts()
+    ad = anndata.AnnData(X=np.zeros_like(counts))
+    ad.layers["raw_counts"] = sp.csr_matrix(counts)
+    ad.layers["spliced"] = sp.csr_matrix(_counts(seed=3))  # velocity layer untouched
+    out = build_standardized_adata(ad, ad.layers["raw_counts"], source="layer:raw_counts")
+    assert "counts" in out.layers
+    assert "raw_counts" not in out.layers   # old name dropped (renamed -> counts)
+    assert "spliced" in out.layers          # velocity preserved
+    np.testing.assert_array_equal(np.asarray(out.layers["counts"].todense()), counts)
+
+
 def test_write_standardized_creates_file(tmp_path):
     counts = _counts()
     ad = anndata.AnnData(X=np.zeros_like(counts))
