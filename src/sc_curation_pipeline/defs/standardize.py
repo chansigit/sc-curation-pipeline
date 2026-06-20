@@ -22,5 +22,7 @@ def build_standardized_adata(adata, counts, *, target_sum: float = 1e4):
 
 def write_standardized(adata, out_path: str) -> None:
     """Write the standardized AnnData to out_path (creating parent dirs)."""
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    dirname = os.path.dirname(out_path)
+    if dirname:
+        os.makedirs(dirname, exist_ok=True)
     adata.write_h5ad(out_path)

@@ -36,3 +36,4 @@ def test_write_standardized_creates_file(tmp_path):
     assert os.path.isfile(path)
     back = anndata.read_h5ad(path)
     assert "counts" in back.layers
+    np.testing.assert_array_equal(np.asarray(back.layers["counts"].todense()), counts)

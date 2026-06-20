@@ -133,7 +133,9 @@ def test_h5ad_qc_plot_failure_non_fatal(tmp_path, write_adata, monkeypatch):
     watch, out, folder, path, key, settings, inst = _setup(
         tmp_path, "plotfail", sp.csr_matrix(counts), write_adata,
         layers={"counts": sp.csr_matrix(counts)})
-    monkeypatch.setattr(plotsmod, "render_qc_panel", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(plotsmod, "render_qc_panel", _boom)
     res = _materialize(path, watch, out, key, settings, inst)
     assert res.success is True
     md = res.asset_materializations_for_node("h5ad_qc")[0].metadata
@@ -158,3 +160,21 @@ def test_h5ad_qc_write_failure_retried(tmp_path, write_adata, monkeypatch):
 
 def test_h5ad_qc_job_targets_asset():
     assert h5ad_qc_job.name == "h5ad_qc_job"
+
+
+def test_h5ad_qc_missing_watch_dir_raises(tmp_path):
+    # No sc/h5ad_path tag + a non-existent watch_dir -> resolve_h5ad_path fast-fails
+    # with a clear SC_CURATION_WATCH_DIR error and writes no output.
+    missing = str(tmp_path / "does_not_exist")
+    key = "ghost_sample"
+    settings = CurationSettings(watch_dir=missing, output_dir=str(tmp_path / "out"))
+    inst = dg.DagsterInstance.ephemeral()
+    inst.add_dynamic_partitions(h5ad_partitions.name, [key])
+    res = dg.materialize(
+        [h5ad_qc], partition_key=key, instance=inst,
+        resources={"curation": settings}, raise_on_error=False,
+    )
+    assert res.success is False
+    msg = [e for e in res.get_step_failure_events() if e.step_key == "h5ad_qc"][0].event_specific_data.error.message
+    assert "SC_CURATION_WATCH_DIR" in msg
+    assert missing in msg

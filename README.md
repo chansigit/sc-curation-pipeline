@@ -92,7 +92,7 @@ uv pip install -p /scratch/users/chensj16/venvs/dl2025/.venv/bin/python \
 | `SC_CURATION_H5AD_GLOB` | `*.h5ad` | 文件夹内匹配 h5ad 的模式 |
 | `SC_CURATION_SCAN_INTERVAL_SEC` | `30` | sensor 最小扫描间隔(秒;在 `dg dev` 启动时读取) |
 | `SC_CURATION_MIN_CELLS` | `100` | 硬性阈值:细胞数低于此值快速失败(无输出) |
-| `SC_CURATION_MIN_GENES` | `5000` | 硬性阈值:基因数中位低于此值快速失败(无输出) |
+| `SC_CURATION_MIN_GENES` | `5000` | 硬性阈值:检测到的基因总数(在 ≥1 个细胞中 counts>0 的基因数)低于此值快速失败(无输出) |
 
 `SC_CURATION_WATCH_DIR` 是必填的——没设会立刻报错(注册资源时就要读它)。可选变量留空或写成非法值会**安全退回默认值**(不会让服务崩溃)。
 
@@ -104,7 +104,7 @@ uv pip install -p /scratch/users/chensj16/venvs/dl2025/.venv/bin/python \
 在项目根目录放一个 `.env`,`dg dev` / `dg check defs` 会自动把它加载进环境,**不用每次 `export`**。仓库带了模板 `.env.example`:
 ```bash
 cd /scratch/users/chensj16/projects/eca-dagster-pipeline/sc-curation-pipeline
-cp .env.example .env        # 然后编辑 .env,至少填好 SC_CURATION_WATCH_DIR
+cp .env.example .env        # 然后编辑 .env,至少填好 SC_CURATION_WATCH_DIR 和 SC_CURATION_OUTPUT_DIR(两者必填)
 ```
 `.env` 已在 `.gitignore` 里、不会被提交。内容示例:
 ```dotenv
@@ -217,7 +217,7 @@ touch "$SC_CURATION_WATCH_DIR/demo_sample/.done"
 - **结构**:`n_cells`、`n_genes`、`X_dtype`、`is_sparse` / `density` / `sparsity`、`has_raw`、`layers` / `obsm` / `obsp`、`obs_columns` / `var_columns`。
 - **计数**:`total_counts`、每细胞中位 `counts` / `genes`、`mito_pct`(`MT-` 基因)、`ribo_pct`(`RPS` / `RPL`)。
 - **文件**:大小、mtime、路径。
-- **asset checks(硬性阈值)**:`min_cells`(细胞数)、`min_genes`(基因数中位)。
+- **asset checks(硬性阈值)**:`min_cells`(细胞数)、`min_genes`(检测到的基因总数,在 ≥1 个细胞中 counts>0 的基因数)。
 
 ### 标准化输出(`h5ad_qc` step 新增)
 
@@ -235,7 +235,7 @@ touch "$SC_CURATION_WATCH_DIR/demo_sample/.done"
 | 变量 | 默认 | 含义 |
 |---|---|---|
 | `SC_CURATION_MIN_CELLS` | `100` | 细胞数低于此值 → run 立即失败,**不写输出文件** |
-| `SC_CURATION_MIN_GENES` | `5000` | 每细胞检出基因数中位低于此值 → run 立即失败,**不写输出文件** |
+| `SC_CURATION_MIN_GENES` | `5000` | 检测到的基因总数(在 ≥1 个细胞中 counts>0 的基因数)低于此值 → run 立即失败,**不写输出文件** |
 
 未达到阈值的样本以 `dagster.Failure` 快速失败,原因写入 run 日志和 metadata——不会留下半截写好的文件。
 
