@@ -28,26 +28,34 @@ def count_n_genes_detected(counts) -> int:
     return int(((C != 0).sum(axis=0) > 0).sum())
 
 
-def compute_count_qc(counts, var_names) -> dict:
-    """QC metrics computed on an in-memory counts matrix (sparse or dense)."""
+def compute_count_qc(counts, var_names, species=None) -> dict:
+    """QC metrics computed on an in-memory counts matrix (sparse or dense).
+
+    ``species`` (a stangene code/name) selects species-aware mitochondrial gene
+    detection via ``stangene.mito_mask``; without it, a generic ``MT-`` prefix is
+    used. Mito is only consumed by the QC plot.
+    """
     is_sparse = sp.issparse(counts)
     C = counts.tocsr() if is_sparse else np.asarray(counts)
     n_cells, n_vars = int(C.shape[0]), int(C.shape[1])
 
-    up = np.char.upper(np.asarray([str(v) for v in var_names], dtype=str))
-    mito_mask = np.char.startswith(up, "MT-")  # per-cell mito kept only for the QC plot
+    if species:
+        mt_mask = stangene.mito_mask(var_names, species)
+    else:
+        up = np.char.upper(np.asarray([str(v) for v in var_names], dtype=str))
+        mt_mask = np.char.startswith(up, "MT-")
 
     if is_sparse:
         counts_per_cell = np.asarray(C.sum(axis=1)).ravel().astype(np.float64)
         genes_per_cell = C.getnnz(axis=1).astype(np.float64)
         nnz_total = int(C.nnz)
-        mito_per_cell = (np.asarray(C[:, mito_mask].sum(axis=1)).ravel()
-                         if mito_mask.any() else np.zeros(n_cells))
+        mito_per_cell = (np.asarray(C[:, mt_mask].sum(axis=1)).ravel()
+                         if mt_mask.any() else np.zeros(n_cells))
     else:
         counts_per_cell = C.sum(axis=1).astype(np.float64)
         genes_per_cell = (C != 0).sum(axis=1).astype(np.float64)
         nnz_total = int((C != 0).sum())
-        mito_per_cell = C[:, mito_mask].sum(axis=1) if mito_mask.any() else np.zeros(n_cells)
+        mito_per_cell = C[:, mt_mask].sum(axis=1) if mt_mask.any() else np.zeros(n_cells)
 
     total = n_cells * n_vars
     total_counts = float(counts_per_cell.sum())
@@ -242,7 +250,7 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
     apply_harmonization(adata, harmon)
     harmon_stats = _harmonization_stats(harmon.mapping_table)
 
-    qc = compute_count_qc(counts, adata.var_names)
+    qc = compute_count_qc(counts, adata.var_names, species=species)
 
     out_path = output_path_for(curation.output_dir, context.partition_key, path)
     try:

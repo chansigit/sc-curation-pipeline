@@ -35,6 +35,19 @@ def test_compute_count_qc_dense():
     np.testing.assert_allclose(qc["per_cell"]["mito_pct"], [0.0, 100.0])
 
 
+def test_compute_count_qc_species_aware_mito_fly():
+    # Fruit-fly mito uses the mt: prefix; species-aware detection must catch it,
+    # while the default (generic MT-) would miss it.
+    counts = np.array([[1.0, 0.0, 4.0], [0.0, 3.0, 0.0]])
+    var = ["Act5C", "mt:Cyt-b", "mt:CoI"]
+    qc_fly = compute_count_qc(counts, var, species="dm")
+    # cell0: mito = mt:CoI col = 4 of total 5 -> 80%; cell1: mt:Cyt-b 3 of 3 -> 100%
+    np.testing.assert_allclose(qc_fly["per_cell"]["mito_pct"], [80.0, 100.0])
+    # default path (no species) uses MT- prefix -> catches none of the mt: genes
+    qc_default = compute_count_qc(counts, var)
+    np.testing.assert_array_equal(qc_default["per_cell"]["mito_pct"], [0.0, 0.0])
+
+
 def test_compute_count_qc_detected_excludes_allzero_genes():
     counts = np.array([[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]])  # only gene0 detected
     qc = compute_count_qc(counts, ["G0", "G1", "G2"])

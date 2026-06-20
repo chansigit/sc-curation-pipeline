@@ -232,7 +232,7 @@ touch "$SC_CURATION_WATCH_DIR/demo_sample/.done"
 - **计数**:`total_counts`、每细胞中位 `counts` / `genes`。
 - **来源 / 输出**:`counts_source`(counts 取自哪)、`output_path`、`source_h5ad`。
 - **物种 / 基因名**:`species`(规范名)、`species_code`(标记原码)、`harmonized`、`n_genes_mapped` / `n_unmapped` / `mapping_rate`。
-- **图**:`qc_plots` —— counts、genes 的小提琴 + counts×genes、counts×mito 散点。注:mito 用 `MT-` 前缀识别(大写后兼容人 `MT-`、鼠 `mt-`);**其它物种或用 Ensembl ID 的数据可能匹配不到,mito 那栏会是空/0,仅供参考**。
+- **图**:`qc_plots` —— counts、genes 的小提琴 + counts×genes、counts×mito 散点。mito 现在**按物种识别**(`stangene.mito_mask`):哺乳类/灵长/斑马鱼用 `MT-` 前缀、灵长另认裸名(`ND1`/`COX1`/`CYTB`…)、果蝇用 `mt:` 前缀、线虫用专名(`nduo-`/`ctc-`/`ctb-1`/`atp-6`)。注:斑马鱼/狨猴参考库未收录 mtDNA 基因,这两种的 mito 可能为空。
 - **硬性阈值(fast-fail,非 asset check)**:`min_cells`、`min_genes` —— 不达标直接失败、不写输出。
 
 ### 标准化输出(`h5ad_qc` step 新增)
