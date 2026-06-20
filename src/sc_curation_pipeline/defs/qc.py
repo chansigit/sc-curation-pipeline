@@ -8,12 +8,24 @@ import anndata as ad
 import h5py
 
 import stancounts
+import stangene
 
 from sc_curation_pipeline.defs.partitions import h5ad_partitions
 from sc_curation_pipeline.defs.settings import CurationSettings, path_for_partition_key
 from sc_curation_pipeline.defs.standardize import build_standardized_adata, write_standardized
+from sc_curation_pipeline.defs.harmonize_apply import apply_harmonization
 
 H5AD_PATH_TAG = "sc/h5ad_path"
+SPECIES_TAG = "sc/species"
+SPECIES_MARKER_PREFIX = ".species."
+
+
+def count_n_genes_detected(counts) -> int:
+    """Number of genes with counts>0 in >=1 cell (name-independent; cheap gate)."""
+    if sp.issparse(counts):
+        return int((np.asarray(counts.tocsr().getnnz(axis=0)).ravel() > 0).sum())
+    C = np.asarray(counts)
+    return int(((C != 0).sum(axis=0) > 0).sum())
 
 
 def compute_count_qc(counts, var_names) -> dict:
@@ -28,20 +40,18 @@ def compute_count_qc(counts, var_names) -> dict:
     if is_sparse:
         counts_per_cell = np.asarray(C.sum(axis=1)).ravel().astype(np.float64)
         genes_per_cell = C.getnnz(axis=1).astype(np.float64)
-        detected_per_gene = np.asarray(C.getnnz(axis=0)).ravel()
         nnz_total = int(C.nnz)
         mito_per_cell = (np.asarray(C[:, mito_mask].sum(axis=1)).ravel()
                          if mito_mask.any() else np.zeros(n_cells))
     else:
         counts_per_cell = C.sum(axis=1).astype(np.float64)
         genes_per_cell = (C != 0).sum(axis=1).astype(np.float64)
-        detected_per_gene = (C != 0).sum(axis=0)
         nnz_total = int((C != 0).sum())
         mito_per_cell = C[:, mito_mask].sum(axis=1) if mito_mask.any() else np.zeros(n_cells)
 
     total = n_cells * n_vars
     total_counts = float(counts_per_cell.sum())
-    n_genes_detected = int((np.asarray(detected_per_gene).ravel() > 0).sum())
+    n_genes_detected = count_n_genes_detected(C)
     with np.errstate(divide="ignore", invalid="ignore"):
         mito_pct_per_cell = np.where(counts_per_cell > 0,
                                      100.0 * mito_per_cell / counts_per_cell, 0.0)
@@ -111,6 +121,63 @@ def output_path_for(output_dir, partition_key, src_path) -> str:
     return os.path.join(output_dir, rel_folder, os.path.basename(src_path))
 
 
+def resolve_species_for(context, src_path) -> tuple[str, str]:
+    """Resolve the sample's species from the sc/species tag, else the marker file.
+
+    Returns (canonical_species, raw_code). Missing/ambiguous marker or an
+    unknown code -> dg.Failure(allow_retries=False) (a typo/forgotten species
+    file is a permanent problem, not a transient one).
+    """
+    code = (context.run.tags.get(SPECIES_TAG) or "").strip()
+    if not code:
+        # No tag (e.g. manual materialize): scan the sample folder for a single
+        # .species.<code> marker.
+        folder = os.path.dirname(src_path)
+        try:
+            codes = [
+                f[len(SPECIES_MARKER_PREFIX):]
+                for f in os.listdir(folder)
+                if f.startswith(SPECIES_MARKER_PREFIX) and f[len(SPECIES_MARKER_PREFIX):]
+            ]
+        except OSError:
+            codes = []
+        code = codes[0].strip() if len(codes) == 1 else ""
+    if not code:
+        raise dg.Failure(
+            description=(
+                f"missing or ambiguous {SPECIES_MARKER_PREFIX}<code> marker for "
+                f"{src_path!r}; declare the species, e.g. {SPECIES_MARKER_PREFIX}hs"
+            ),
+            metadata={"partition": dg.MetadataValue.text(context.partition_key)},
+            allow_retries=False,
+        )
+    try:
+        return stangene.resolve_species(code), code
+    except ValueError as exc:
+        raise dg.Failure(
+            description=f"unknown species code for {src_path!r}: {exc}",
+            metadata={
+                "partition": dg.MetadataValue.text(context.partition_key),
+                "species_code": dg.MetadataValue.text(code),
+            },
+            allow_retries=False,
+        )
+
+
+def _harmonization_stats(mapping_table) -> dict:
+    """Mapping counts from a stangene mapping_table (gene features only)."""
+    status = mapping_table["mapping_status"]
+    gene = status != "non_gene_feature"
+    mapped = gene & (status != "unmapped")
+    n_gene = int(gene.sum())
+    n_mapped = int(mapped.sum())
+    return {
+        "n_genes_mapped": n_mapped,
+        "n_unmapped": int((status == "unmapped").sum()),
+        "mapping_rate": (n_mapped / n_gene) if n_gene else 0.0,
+    }
+
+
 @dg.asset(
     partitions_def=h5ad_partitions,
     group_name="curation",
@@ -126,6 +193,10 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
                       "h5ad_path": dg.MetadataValue.path(path)},
             allow_retries=False,
         )
+    # Resolve species early (cheap tag/marker lookup) so a missing/unknown
+    # species marker fast-fails before the heavier counts/standardize work.
+    species, species_code = resolve_species_for(context, path)
+
     try:
         adata = ad.read_h5ad(path)
     except Exception as exc:  # transient I/O on a valid HDF5 -> retriable
@@ -144,22 +215,34 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
         )
     counts, counts_source = res["counts"], res["source"]
 
-    qc = compute_count_qc(counts, adata.var_names)
-
-    if qc["n_cells"] < curation.min_cells:
+    # Hard gates first (cheap, name-independent) so sub-threshold samples reject
+    # before the heavier harmonize/standardize/write work.
+    n_cells = int(counts.shape[0])
+    if n_cells < curation.min_cells:
         raise dg.Failure(
-            description=f"rejected: n_cells {qc['n_cells']} < min_cells {curation.min_cells}",
-            metadata={"n_cells": dg.MetadataValue.int(qc["n_cells"]),
+            description=f"rejected: n_cells {n_cells} < min_cells {curation.min_cells}",
+            metadata={"n_cells": dg.MetadataValue.int(n_cells),
                       "min_cells": dg.MetadataValue.int(curation.min_cells)},
             allow_retries=False,
         )
-    if qc["n_genes_detected"] < curation.min_genes:
+    n_genes_detected = count_n_genes_detected(counts)
+    if n_genes_detected < curation.min_genes:
         raise dg.Failure(
-            description=f"rejected: n_genes_detected {qc['n_genes_detected']} < min_genes {curation.min_genes}",
-            metadata={"n_genes_detected": dg.MetadataValue.int(qc["n_genes_detected"]),
+            description=f"rejected: n_genes_detected {n_genes_detected} < min_genes {curation.min_genes}",
+            metadata={"n_genes_detected": dg.MetadataValue.int(n_genes_detected),
                       "min_genes": dg.MetadataValue.int(curation.min_genes)},
             allow_retries=False,
         )
+
+    # Harmonize gene names to canonical symbols. get_counts already ran on the
+    # original var_names (.raw alignment); renaming only relabels var, so the
+    # counts matrix columns stay positionally aligned. Doing it before QC means
+    # the QC (incl. MT- mito detection) and the written file use canonical names.
+    harmon = stangene.harmonize_anndata(adata, species)
+    apply_harmonization(adata, harmon)
+    harmon_stats = _harmonization_stats(harmon.mapping_table)
+
+    qc = compute_count_qc(counts, adata.var_names)
 
     out_path = output_path_for(curation.output_dir, context.partition_key, path)
     try:
@@ -185,6 +268,12 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
             "output_path": dg.MetadataValue.path(out_path),
             "counts_source": dg.MetadataValue.text(counts_source),
             "source_h5ad": dg.MetadataValue.path(path),
+            "species": dg.MetadataValue.text(species),
+            "species_code": dg.MetadataValue.text(species_code),
+            "harmonized": dg.MetadataValue.bool(True),
+            "n_genes_mapped": dg.MetadataValue.int(harmon_stats["n_genes_mapped"]),
+            "n_unmapped": dg.MetadataValue.int(harmon_stats["n_unmapped"]),
+            "mapping_rate": dg.MetadataValue.float(harmon_stats["mapping_rate"]),
             "qc_plots": qc_plots,
             "n_cells": dg.MetadataValue.int(qc["n_cells"]),
             "n_genes_detected": dg.MetadataValue.int(qc["n_genes_detected"]),

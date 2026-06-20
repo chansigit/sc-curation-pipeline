@@ -2,7 +2,7 @@
 
 用 **Dagster** 监控一个目录、对新上传的单细胞 `.h5ad` 文件自动做轻量 **QC**,结果以 **Dagster asset metadata + asset checks** 的形式呈现在 Web UI 里——**不额外落地任何文件**,也不改动源数据。
 
-> 约定:**一个文件夹 = 一个样本 = 一个 `.h5ad`**。上传完成后,在该文件夹里放一个空的 `.done` 标记文件来触发处理。
+> 约定:**一个文件夹 = 一个样本 = 一个 `.h5ad`**。上传完成后,在该文件夹里放两个空标记文件来触发处理:`.done`(上传完成)+ `.species.<code>`(物种,如 `.species.hs`)。
 
 ---
 
@@ -136,16 +136,30 @@ export SC_CURATION_MIN_CELLS=200
 $SC_CURATION_WATCH_DIR/
 ├── GSE123_sampleA/
 │   ├── matrix.h5ad
+│   ├── .species.hs    ← 物种声明(人=hs),基因名标准化要用
 │   └── .done          ← 上传完成后"再"放这个,sensor 才会处理
 ├── GSE123_sampleB/
 │   └── matrix.h5ad    ← 没有 .done → 暂不处理(视为还在上传)
 └── proj/
     └── pbmc/
         ├── pbmc.h5ad  ← 支持任意层级嵌套
+        ├── .species.mm
         └── .done
 ```
 
 **关键:先把 h5ad 传完,再放 `.done`。** 这样 sensor 永远不会去碰一个还没写完的文件。
+
+**物种标记 `.species.<code>`**(基因名标准化需要;缺失/无法识别/多于一个 → run 快速失败、不写输出):
+
+| code | 物种 | code | 物种 |
+|---|---|---|---|
+| `hs` / `human` | 人 | `cyno` / `cynomolgus` | 食蟹猴 |
+| `mm` / `mouse` | 小鼠 | `rhesus` | 恒河猴 |
+| `rn` / `rat` | 大鼠 | `marmoset` | 狨猴 |
+| `dr` / `zebrafish` | 斑马鱼 | `lemur` / `mouse_lemur` | 鼠狐猴 |
+| `dm` / `fruit_fly` | 果蝇 | `ce` / `c_elegans` | 线虫 |
+
+(短码、全名均可;大小写不敏感。)
 
 ---
 
@@ -217,6 +231,7 @@ touch "$SC_CURATION_WATCH_DIR/demo_sample/.done"
 - **规模 / 结构**:`n_cells`、`n_vars`、`n_genes_detected`(在 ≥1 个细胞中 counts>0 的基因数)、`sparsity`(counts 矩阵零元素占比)、`layers`、`obsm`。
 - **计数**:`total_counts`、每细胞中位 `counts` / `genes`。
 - **来源 / 输出**:`counts_source`(counts 取自哪)、`output_path`、`source_h5ad`。
+- **物种 / 基因名**:`species`(规范名)、`species_code`(标记原码)、`harmonized`、`n_genes_mapped` / `n_unmapped` / `mapping_rate`。
 - **图**:`qc_plots` —— counts、genes 的小提琴 + counts×genes、counts×mito 散点。注:mito 用 `MT-` 前缀识别(大写后兼容人 `MT-`、鼠 `mt-`);**其它物种或用 Ensembl ID 的数据可能匹配不到,mito 那栏会是空/0,仅供参考**。
 - **硬性阈值(fast-fail,非 asset check)**:`min_cells`、`min_genes` —— 不达标直接失败、不写输出。
 
@@ -230,6 +245,7 @@ touch "$SC_CURATION_WATCH_DIR/demo_sample/.done"
 - `X` — 对 counts 做 `normalize_total(target_sum=1e4)` + `log1p` 的归一化结果
 - velocity 相关 layers(`spliced` / `unspliced` / `ambiguous` 等)原样保留到输出
 - `obs` / `var` / `obsm` / `obsp` 保持不变
+- **基因名标准化**:由 `.species.<code>` 声明物种,调 stangene 把 `var_names` 统一成规范基因 symbol —— 映射到的换成官方 symbol(如 `p53`→`TP53`、Ensembl ID→symbol),**未映射的保留原名**,重名自动加后缀去重,原名存进 `var["original_feature_name"]`;stangene 的映射列(`gene_id_harmonized` / `mapping_status` / …)并入 `var`。支持 10 个物种(人/鼠/大鼠/斑马鱼/果蝇/线虫 + 食蟹猴/恒河猴/狨猴/鼠狐猴),参考数据离线随包附带。
 
 **硬性快速失败(fast-fail)阈值:**
 

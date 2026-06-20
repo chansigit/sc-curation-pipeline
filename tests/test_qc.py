@@ -44,10 +44,13 @@ def test_compute_count_qc_detected_excludes_allzero_genes():
 
 # ---- asset helpers ----
 
-def _materialize(path, watch, out, key, settings, instance):
+def _materialize(path, watch, out, key, settings, instance, species="hs"):
+    tags = {"sc/h5ad_path": path}
+    if species is not None:
+        tags["sc/species"] = species
     return dg.materialize(
         [h5ad_qc], partition_key=key, instance=instance,
-        resources={"curation": settings}, tags={"sc/h5ad_path": path},
+        resources={"curation": settings}, tags=tags,
         raise_on_error=False,
     )
 
@@ -75,9 +78,49 @@ def test_h5ad_qc_writes_output_and_qc(tmp_path, write_adata):
     assert md["n_cells"].value == 200
     assert "data:image/png;base64," in md["qc_plots"].value
     assert md["counts_source"].value == "layer:counts"
+    assert md["species"].value == "human"            # .species.hs -> human
+    assert md["harmonized"].value is True
+    assert "mapping_rate" in md
     out_path = output_path_for(out, key, path)
     assert os.path.isfile(out_path)              # written to output dir
     assert os.path.isfile(path)                  # source still present, untouched
+
+
+def test_h5ad_qc_renames_var_to_canonical_symbols(tmp_path, write_adata):
+    import anndata
+    # Real human symbols: TP53 (exact), p53 (alias -> TP53), plus an unmapped one.
+    names = ["TP53", "p53", "FOOBAR_NOTAGENE"]
+    counts = np.ones((5, 3), dtype=np.float64)
+    watch, out, folder, path, key, settings, inst = _setup(
+        tmp_path, "human_s", sp.csr_matrix(counts), write_adata,
+        layers={"counts": sp.csr_matrix(counts)}, var_names=names,
+        min_cells=1, min_genes=1)
+    res = _materialize(path, watch, out, key, settings, inst, species="hs")
+    assert res.success, res
+
+    md = res.asset_materializations_for_node("h5ad_qc")[0].metadata
+    assert md["species"].value == "human"
+    assert md["n_genes_mapped"].value >= 2  # TP53 + p53 both resolve to TP53
+
+    back = anndata.read_h5ad(output_path_for(out, key, path))
+    # TP53 appears (twice from TP53 + p53 -> made unique); unmapped kept as-is
+    assert any(n.startswith("TP53") for n in back.var_names)
+    assert "FOOBAR_NOTAGENE" in list(back.var_names)
+    assert "original_feature_name" in back.var.columns
+    assert list(back.var["original_feature_name"]) == names
+
+
+def test_h5ad_qc_missing_species_fast_fail(tmp_path, write_adata):
+    counts = _counts()
+    watch, out, folder, path, key, settings, inst = _setup(
+        tmp_path, "nospecies", sp.csr_matrix(counts), write_adata,
+        layers={"counts": sp.csr_matrix(counts)})
+    # no sc/species tag AND no .species.* marker in the folder -> fast-fail
+    res = _materialize(path, watch, out, key, settings, inst, species=None)
+    assert res.success is False
+    msg = [e for e in res.get_step_failure_events() if e.step_key == "h5ad_qc"][0].event_specific_data.error.message
+    assert ".species." in msg
+    assert not os.path.isfile(output_path_for(out, key, path))
 
 
 def test_h5ad_qc_rejects_too_few_cells(tmp_path, write_adata):

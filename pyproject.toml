@@ -15,10 +15,12 @@ dev = [
     "anndata>=0.12",
     "matplotlib>=3.7",
     "stancounts",
+    "stangene",
 ]
 
 [tool.uv.sources]
 stancounts = { path = "/scratch/users/chensj16/projects/stancounts", editable = true }
+stangene = { path = "/scratch/users/chensj16/projects/stangene", editable = true }
 
 [build-system]
 requires = ["hatchling"]

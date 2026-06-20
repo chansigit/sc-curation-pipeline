@@ -4,7 +4,12 @@ import os
 import dagster as dg
 
 from sc_curation_pipeline.defs.partitions import h5ad_partitions
-from sc_curation_pipeline.defs.qc import H5AD_PATH_TAG, h5ad_qc_job
+from sc_curation_pipeline.defs.qc import (
+    H5AD_PATH_TAG,
+    SPECIES_MARKER_PREFIX,
+    SPECIES_TAG,
+    h5ad_qc_job,
+)
 from sc_curation_pipeline.defs.settings import CurationSettings, partition_key_for
 
 # Fallback tick interval used when SC_CURATION_SCAN_INTERVAL_SEC is unset or invalid.
@@ -24,18 +29,35 @@ def _interval_seconds() -> int:
         return _DEFAULT_INTERVAL_SEC
 
 
+def _find_species_code(files: list[str]) -> str | None:
+    """Species code from a single `.species.<code>` marker, else None.
+
+    Zero or multiple species markers (or an empty code) -> None, so the sample is
+    still discovered but the asset fast-fails with a clear reason.
+    """
+    codes = [
+        f[len(SPECIES_MARKER_PREFIX):]
+        for f in files
+        if f.startswith(SPECIES_MARKER_PREFIX) and f[len(SPECIES_MARKER_PREFIX):]
+    ]
+    return codes[0] if len(codes) == 1 else None
+
+
 def discover_samples(
     watch_dir: str, done_marker: str, h5ad_glob: str
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, str | None]]:
     """Find completed sample folders under watch_dir.
 
     A folder qualifies if it contains the done marker AND exactly one file
-    matching h5ad_glob. Returns sorted [(partition_key, abs_h5ad_path), ...].
-    Folders with the marker but zero or multiple h5ads are skipped.
+    matching h5ad_glob. Returns sorted
+    [(partition_key, abs_h5ad_path, species_code_or_None), ...]. Folders with
+    the marker but zero or multiple h5ads are skipped. The species code comes
+    from a `.species.<code>` marker; it is NOT required for discovery (a missing
+    or ambiguous one yields None and the asset fast-fails).
     """
     if not os.path.isdir(watch_dir):
         return []
-    found: list[tuple[str, str]] = []
+    found: list[tuple[str, str, str | None]] = []
     for root, _dirs, files in os.walk(watch_dir):
         if done_marker not in files:
             continue
@@ -43,7 +65,7 @@ def discover_samples(
         if len(matches) != 1:
             continue
         key = partition_key_for(watch_dir, root)
-        found.append((key, os.path.abspath(matches[0])))
+        found.append((key, os.path.abspath(matches[0]), _find_species_code(files)))
     found.sort(key=lambda kv: kv[0])
     return found
 
@@ -72,22 +94,22 @@ def watch_h5ad_dir(
     # recoverable via manual re-materialize). Acceptable for dev; revisit for the
     # production daemon (spec §10).
     new = [
-        (key, path)
-        for key, path in discovered
+        (key, path, species)
+        for key, path, species in discovered
         if not context.instance.has_dynamic_partition(h5ad_partitions.name, key)
     ]
     if not new:
         return dg.SkipReason("no new samples since last tick")
 
-    new_keys = [key for key, _ in new]
+    new_keys = [key for key, _, _ in new]
     return dg.SensorResult(
         dynamic_partitions_requests=[h5ad_partitions.build_add_request(new_keys)],
         run_requests=[
             dg.RunRequest(
                 partition_key=key,
                 run_key=key,
-                tags={H5AD_PATH_TAG: path},
+                tags={H5AD_PATH_TAG: path, SPECIES_TAG: species or ""},
             )
-            for key, path in new
+            for key, path, species in new
         ],
     )

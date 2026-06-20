@@ -5,10 +5,10 @@ import dagster as dg
 from sc_curation_pipeline.defs.sensors import discover_samples, watch_h5ad_dir
 from sc_curation_pipeline.defs.settings import CurationSettings, partition_key_for
 from sc_curation_pipeline.defs.partitions import h5ad_partitions
-from sc_curation_pipeline.defs.qc import H5AD_PATH_TAG
+from sc_curation_pipeline.defs.qc import H5AD_PATH_TAG, SPECIES_TAG
 
 
-def _make_sample(watch, name, *, with_done=True, n_h5ad=1):
+def _make_sample(watch, name, *, with_done=True, n_h5ad=1, species="hs"):
     folder = os.path.join(watch, name)
     os.makedirs(folder, exist_ok=True)
     for i in range(n_h5ad):
@@ -16,6 +16,8 @@ def _make_sample(watch, name, *, with_done=True, n_h5ad=1):
             fh.write(b"x")
     if with_done:
         open(os.path.join(folder, ".done"), "w").close()
+    if species is not None:
+        open(os.path.join(folder, f".species.{species}"), "w").close()
     return folder
 
 
@@ -28,13 +30,29 @@ def test_discover_samples_only_done_with_one_h5ad(tmp_path):
     nested = _make_sample(watch, "GSE1/sampleA", with_done=True, n_h5ad=1)  # nested OK
 
     found = discover_samples(watch, ".done", "*.h5ad")
-    keys = {k for k, _ in found}
+    keys = {k for k, _, _ in found}
     assert keys == {
         partition_key_for(watch, good),
         partition_key_for(watch, nested),
     }
-    paths = dict(found)
+    paths = {k: p for k, p, _ in found}
     assert os.path.isfile(paths[partition_key_for(watch, good)])
+    codes = {k: sp for k, _, sp in found}
+    assert codes[partition_key_for(watch, good)] == "hs"  # .species.hs marker
+
+
+def test_discover_species_code_missing_or_ambiguous(tmp_path):
+    watch = str(tmp_path / "watch")
+    os.makedirs(watch, exist_ok=True)
+    # no species marker -> discovered with code None
+    nosp = _make_sample(watch, "nospecies", with_done=True, n_h5ad=1, species=None)
+    # two species markers -> ambiguous -> code None
+    two = _make_sample(watch, "twospecies", with_done=True, n_h5ad=1, species="hs")
+    open(os.path.join(two, ".species.mm"), "w").close()
+
+    codes = {k: sp for k, _, sp in discover_samples(watch, ".done", "*.h5ad")}
+    assert codes[partition_key_for(watch, nosp)] is None
+    assert codes[partition_key_for(watch, two)] is None
 
 
 def test_sensor_registers_and_requests_new(tmp_path):
@@ -53,6 +71,7 @@ def test_sensor_registers_and_requests_new(tmp_path):
     assert [r.partition_key for r in result.run_requests] == [key]
     assert result.run_requests[0].run_key == key
     assert result.run_requests[0].tags[H5AD_PATH_TAG].endswith("f0.h5ad")
+    assert result.run_requests[0].tags[SPECIES_TAG] == "hs"  # from .species.hs
     dpr = result.dynamic_partitions_requests[0]
     assert dpr.partitions_def_name == "h5ad_samples"
     assert dpr.partition_keys == [key]
