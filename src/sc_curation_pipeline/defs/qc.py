@@ -23,8 +23,7 @@ def compute_count_qc(counts, var_names) -> dict:
     n_cells, n_vars = int(C.shape[0]), int(C.shape[1])
 
     up = np.char.upper(np.asarray([str(v) for v in var_names], dtype=str))
-    mito_mask = np.char.startswith(up, "MT-")
-    ribo_mask = np.char.startswith(up, "RPS") | np.char.startswith(up, "RPL")
+    mito_mask = np.char.startswith(up, "MT-")  # per-cell mito kept only for the QC plot
 
     if is_sparse:
         counts_per_cell = np.asarray(C.sum(axis=1)).ravel().astype(np.float64)
@@ -33,15 +32,12 @@ def compute_count_qc(counts, var_names) -> dict:
         nnz_total = int(C.nnz)
         mito_per_cell = (np.asarray(C[:, mito_mask].sum(axis=1)).ravel()
                          if mito_mask.any() else np.zeros(n_cells))
-        ribo_per_cell = (np.asarray(C[:, ribo_mask].sum(axis=1)).ravel()
-                         if ribo_mask.any() else np.zeros(n_cells))
     else:
         counts_per_cell = C.sum(axis=1).astype(np.float64)
         genes_per_cell = (C != 0).sum(axis=1).astype(np.float64)
         detected_per_gene = (C != 0).sum(axis=0)
         nnz_total = int((C != 0).sum())
         mito_per_cell = C[:, mito_mask].sum(axis=1) if mito_mask.any() else np.zeros(n_cells)
-        ribo_per_cell = C[:, ribo_mask].sum(axis=1) if ribo_mask.any() else np.zeros(n_cells)
 
     total = n_cells * n_vars
     total_counts = float(counts_per_cell.sum())
@@ -56,10 +52,7 @@ def compute_count_qc(counts, var_names) -> dict:
         "total_counts": total_counts,
         "median_counts_per_cell": float(np.median(counts_per_cell)) if n_cells else 0.0,
         "median_genes_per_cell": float(np.median(genes_per_cell)) if n_cells else 0.0,
-        "density": (nnz_total / total) if total else 0.0,
         "sparsity": (1.0 - nnz_total / total) if total else 0.0,
-        "mito_pct": float(100.0 * mito_per_cell.sum() / total_counts) if total_counts else 0.0,
-        "ribo_pct": float(100.0 * ribo_per_cell.sum() / total_counts) if total_counts else 0.0,
         "per_cell": {"counts": counts_per_cell, "genes": genes_per_cell, "mito_pct": mito_pct_per_cell},
     }
 
@@ -199,10 +192,7 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
             "total_counts": dg.MetadataValue.float(qc["total_counts"]),
             "median_counts_per_cell": dg.MetadataValue.float(qc["median_counts_per_cell"]),
             "median_genes_per_cell": dg.MetadataValue.float(qc["median_genes_per_cell"]),
-            "density": dg.MetadataValue.float(qc["density"]),
             "sparsity": dg.MetadataValue.float(qc["sparsity"]),
-            "mito_pct": dg.MetadataValue.float(qc["mito_pct"]),
-            "ribo_pct": dg.MetadataValue.float(qc["ribo_pct"]),
             "layers": dg.MetadataValue.json(list(std.layers.keys())),
             "obsm": dg.MetadataValue.json(list(std.obsm.keys())),
         }

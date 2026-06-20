@@ -205,8 +205,8 @@ touch "$SC_CURATION_WATCH_DIR/demo_sample/.done"
 
 - 一个 tick(≤30s)内,sensor 注册分区 `demo_sample` 并触发一次 `h5ad_qc` run。
 - 在 UI **Assets → `h5ad_qc` → 选 `demo_sample` 分区**,可以看到:
-  - **Metadata**:`n_cells` / `n_genes` / `mito_pct` / `ribo_pct` / `total_counts` / `sparsity` / `obs_columns` / 文件大小、路径、counts 来源等。
-  - **Checks**:`min_cells` / `min_genes` 的绿 / 红。
+  - **Metadata**:`output_path`、`counts_source`、`n_cells` / `n_genes_detected` / `n_vars` / `total_counts` / 每细胞中位 `counts`/`genes` / `sparsity` / `layers` / `obsm`,以及 `qc_plots`(内嵌图)。
+  - 不达 `min_cells` / `min_genes` 阈值的样本会**快速失败(红 run)、不写输出**,原因写在 metadata。
   - 通过阈值后,标准化 `.h5ad` 写入 `SC_CURATION_OUTPUT_DIR`。
 - 试验失败路径:放一个损坏的 h5ad(+ `.done`)→ 那个分区的 run 变红,原因写在 metadata;或用低细胞数样本触发硬性阈值快速失败。
 
@@ -214,10 +214,11 @@ touch "$SC_CURATION_WATCH_DIR/demo_sample/.done"
 
 ## 6. QC 指标 & 检查
 
-- **结构**:`n_cells`、`n_genes`、`X_dtype`、`is_sparse` / `density` / `sparsity`、`has_raw`、`layers` / `obsm` / `obsp`、`obs_columns` / `var_columns`。
-- **计数**:`total_counts`、每细胞中位 `counts` / `genes`、`mito_pct`(`MT-` 基因)、`ribo_pct`(`RPS` / `RPL`)。
-- **文件**:大小、mtime、路径。
-- **asset checks(硬性阈值)**:`min_cells`(细胞数)、`min_genes`(检测到的基因总数,在 ≥1 个细胞中 counts>0 的基因数)。
+- **规模 / 结构**:`n_cells`、`n_vars`、`n_genes_detected`(在 ≥1 个细胞中 counts>0 的基因数)、`sparsity`(counts 矩阵零元素占比)、`layers`、`obsm`。
+- **计数**:`total_counts`、每细胞中位 `counts` / `genes`。
+- **来源 / 输出**:`counts_source`(counts 取自哪)、`output_path`、`source_h5ad`。
+- **图**:`qc_plots` —— counts、genes 的小提琴 + counts×genes、counts×mito 散点。注:mito 用 `MT-` 前缀识别(大写后兼容人 `MT-`、鼠 `mt-`);**其它物种或用 Ensembl ID 的数据可能匹配不到,mito 那栏会是空/0,仅供参考**。
+- **硬性阈值(fast-fail,非 asset check)**:`min_cells`、`min_genes` —— 不达标直接失败、不写输出。
 
 ### 标准化输出(`h5ad_qc` step 新增)
 
@@ -239,7 +240,7 @@ touch "$SC_CURATION_WATCH_DIR/demo_sample/.done"
 
 未达到阈值的样本以 `dagster.Failure` 快速失败,原因写入 run 日志和 metadata——不会留下半截写好的文件。
 
-**已移除的配置项:**`max_mito_pct` 和 `is_raw_counts` 不再作为检查阈值(mito% 仍作为 QC metadata 计算并展示,但不触发 check)。
+**已移除:**`max_mito_pct`、`is_raw_counts`(检查项);以及 `mito_pct` / `ribo_pct` / `density`(QC metadata 数字)。mito 分布仍在 `qc_plots` 图里展示,但不再作为 metadata 数字输出(跨物种不可靠,见上)。
 
 ---
 

@@ -27,7 +27,10 @@ def test_compute_count_qc_dense():
     assert qc["n_vars"] == 3
     assert qc["n_genes_detected"] == 3  # all 3 genes seen in >=1 cell
     assert qc["total_counts"] == 6.0
-    assert abs(qc["mito_pct"] - 50.0) < 1e-6      # MT-CO1 col sum 3 / 6
+    # mito_pct / ribo_pct / density removed from metadata; sparsity kept.
+    assert "mito_pct" not in qc and "ribo_pct" not in qc and "density" not in qc
+    assert "sparsity" in qc
+    # per-cell mito is still computed (the QC plot uses it).
     np.testing.assert_array_equal(qc["per_cell"]["counts"], [3.0, 3.0])
     np.testing.assert_allclose(qc["per_cell"]["mito_pct"], [0.0, 100.0])
 
