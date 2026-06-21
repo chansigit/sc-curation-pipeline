@@ -298,5 +298,7 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
 
 h5ad_qc_job = dg.define_asset_job(
     name="h5ad_qc_job",
-    selection=dg.AssetSelection.assets("h5ad_qc"),
+    # Each discovered sample runs the full chain in one run: h5ad_qc (standardize +
+    # write) then its downstream cell_filtered (read the file, filter cells).
+    selection=dg.AssetSelection.assets("h5ad_qc", "cell_filtered"),
 )

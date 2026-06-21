@@ -19,17 +19,25 @@ $SC_CURATION_WATCH_DIR/   (可配置, 在 $SCRATCH 下, 递归扫描)
         (sampleB 没有 .done → 暂不处理)            ▼
                                             asset  h5ad_qc   (1 分区 = 1 个样本)
                                               ├─ anndata.read_h5ad(backed='r')  省内存
-                                              ├─ 用 scanpy 算 QC
-                                              ├─ 写进物化 metadata
-                                              └─ 跑 3 个阈值 asset check
+                                              ├─ 恢复 counts + 标准化 + 基因名标准化
+                                              ├─ 用 scanpy 算 QC、写进物化 metadata
+                                              ├─ 硬性阈值不达标 → 快速失败(红 run)
+                                              └─ 通过 → 写标准化 .h5ad 到 OUTPUT_DIR
+                                                   │  (同一 run 内自动接力)
+                                                   ▼
+                                            asset  cell_filtered   (deps=["h5ad_qc"])
+                                              ├─ 读上一步的标准化 .h5ad
+                                              ├─ 按每细胞检出基因数过滤(默认 ≥400)
+                                              └─ 写 *_filtered.h5ad(全细胞文件原样保留)
                                                    │
                                                    ▼
-                                            Dagster UI: 每样本一格 + QC metadata + 绿/红检查
+                                            Dagster UI: 每样本一格 + QC metadata + 绿/红 run
 ```
 
 - **打不开 / 损坏 / 缺文件** → 该分区的 run **变红**(`dagster.Failure`),失败原因在 metadata 里。
 - **未达到硬性阈值**(细胞数 < `SC_CURATION_MIN_CELLS` 或基因数 < `SC_CURATION_MIN_GENES`)→ run **变红**(`dagster.Failure`),**不写输出文件**。
 - **通过阈值** → run 变绿,标准化 `.h5ad` 写入 `SC_CURATION_OUTPUT_DIR`,QC metadata 在 Asset UI 里可查。
+- **同一个 run 紧接着跑 `cell_filtered`**:按每细胞检出基因数(默认 ≥ `SC_CURATION_MIN_GENES_PER_CELL`)过滤,另写一个 `*_filtered.h5ad`;过滤后剩余细胞 < `SC_CURATION_MIN_CELLS` 则该步快速失败、不写过滤文件。
 
 ---
 
@@ -93,6 +101,7 @@ uv pip install -p /scratch/users/chensj16/venvs/dl2025/.venv/bin/python \
 | `SC_CURATION_SCAN_INTERVAL_SEC` | `30` | sensor 最小扫描间隔(秒;在 `dg dev` 启动时读取) |
 | `SC_CURATION_MIN_CELLS` | `100` | 硬性阈值:细胞数低于此值快速失败(无输出) |
 | `SC_CURATION_MIN_GENES` | `5000` | 硬性阈值:检测到的基因总数(在 ≥1 个细胞中 counts>0 的基因数)低于此值快速失败(无输出) |
+| `SC_CURATION_MIN_GENES_PER_CELL` | `400` | 细胞级过滤(`cell_filtered` 步骤):每个细胞检出基因数低于此值的细胞被剔除 |
 
 `SC_CURATION_WATCH_DIR` 是必填的——没设会立刻报错(注册资源时就要读它)。可选变量留空或写成非法值会**安全退回默认值**(不会让服务崩溃)。
 
@@ -112,6 +121,7 @@ SC_CURATION_WATCH_DIR=/scratch/users/chensj16/sc-curation-watch
 SC_CURATION_OUTPUT_DIR=/scratch/users/chensj16/sc-curation-output
 SC_CURATION_MIN_CELLS=200
 SC_CURATION_MIN_GENES=5000
+SC_CURATION_MIN_GENES_PER_CELL=400
 # 其余不写就用默认值
 ```
 
@@ -258,6 +268,16 @@ touch "$SC_CURATION_WATCH_DIR/demo_sample/.done"
 
 **已移除:**`max_mito_pct`、`is_raw_counts`(检查项);以及 `mito_pct` / `ribo_pct` / `density`(QC metadata 数字)。mito 分布仍在 `qc_plots` 图里展示,但不再作为 metadata 数字输出(跨物种不可靠,见上)。
 
+### 细胞级过滤(`cell_filtered` step,自动接在 `h5ad_qc` 之后)
+
+`cell_filtered` 是一个**下游 asset**(`deps=["h5ad_qc"]`),和 `h5ad_qc` 同属一个 job——sensor 发现新样本时,一个 run 里会**先跑 `h5ad_qc`、再自动跑 `cell_filtered`**,无需手动触发。
+
+- **读**:`h5ad_qc` 写到 `SC_CURATION_OUTPUT_DIR` 的标准化 `.h5ad`(用 `layers["counts"]` 算每细胞检出基因数)。
+- **过滤**:剔除检出基因数 `< SC_CURATION_MIN_GENES_PER_CELL`(默认 400)的细胞;`X` 与所有 layers 一起按行子集。
+- **写**:过滤后的对象写成**单独**的 `*_filtered.h5ad`(同目录、加后缀)——`h5ad_qc` 的全细胞文件**原样保留**,过滤是非破坏性的。
+- **硬性快速失败**:过滤后剩余细胞数 `< SC_CURATION_MIN_CELLS` → `dagster.Failure`(红 run)、**不写输出**。
+- **metadata**:`filtered_output_path`、`source_standardized`、`min_genes_per_cell`、`n_cells_before` / `n_cells_after` / `n_cells_removed`。
+
 ---
 
 ## 7. 重新处理某个样本
@@ -286,10 +306,14 @@ src/sc_curation_pipeline/
 └── defs/
     ├── settings.py           # CurationSettings(环境变量)+ 可逆的分区键编码
     ├── partitions.py         # h5ad_samples 动态分区
-    ├── qc.py                 # compute_qc 纯函数 + h5ad_qc asset + job
+    ├── qc.py                 # compute_count_qc 等纯函数 + h5ad_qc asset + job(选 h5ad_qc + cell_filtered)
+    ├── standardize.py        # build_standardized_adata / write_standardized
+    ├── harmonize_apply.py    # apply_harmonization(把 stangene 结果写回 var_names)
+    ├── filter_cells.py       # filter_cells_by_genes / filtered_path_for 纯函数
+    ├── filtering.py          # cell_filtered 下游 asset(deps=["h5ad_qc"])
     ├── sensors.py            # discover_samples 扫描器 + watch_h5ad_dir sensor
     └── registration.py       # 把 asset / job / sensor / resource 打包成 Definitions
-tests/                        # pytest(test_settings / test_qc / test_sensor)
+tests/                        # pytest(test_settings / test_qc / test_sensor / test_filter_cells / test_filtering / …)
 docs/superpowers/             # 设计 spec 与实现 plan
 ```
 

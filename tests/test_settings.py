@@ -10,6 +10,18 @@ def test_field_defaults(settings_factory):
     assert cs.scan_interval_sec == 30
     assert cs.min_cells == 100
     assert cs.min_genes == 5000
+    assert cs.min_genes_per_cell == 400
+
+
+def test_build_reads_min_genes_per_cell(monkeypatch):
+    monkeypatch.setenv("SC_CURATION_WATCH_DIR", "/w")
+    monkeypatch.setenv("SC_CURATION_OUTPUT_DIR", "/out")
+    monkeypatch.delenv("SC_CURATION_MIN_GENES_PER_CELL", raising=False)
+    assert S.build_curation_settings().min_genes_per_cell == 400  # default
+    monkeypatch.setenv("SC_CURATION_MIN_GENES_PER_CELL", "250")
+    assert S.build_curation_settings().min_genes_per_cell == 250
+    monkeypatch.setenv("SC_CURATION_MIN_GENES_PER_CELL", "")       # invalid -> default
+    assert S.build_curation_settings().min_genes_per_cell == 400
 
 
 def test_build_requires_output_dir(monkeypatch):

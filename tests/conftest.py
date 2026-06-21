@@ -24,6 +24,7 @@ def settings_factory(tmp_path):
             scan_interval_sec=30,
             min_cells=100,
             min_genes=5000,
+            min_genes_per_cell=400,
         )
         kwargs.update(overrides)
         return CurationSettings(**kwargs)

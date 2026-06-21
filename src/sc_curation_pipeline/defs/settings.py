@@ -24,6 +24,7 @@ class CurationSettings(dg.ConfigurableResource):
     scan_interval_sec: int = 30
     min_cells: int = 100
     min_genes: int = 5000
+    min_genes_per_cell: int = 400
 
 
 def build_curation_settings() -> CurationSettings:
@@ -56,6 +57,7 @@ def build_curation_settings() -> CurationSettings:
         scan_interval_sec=_env_int("SC_CURATION_SCAN_INTERVAL_SEC", 30),
         min_cells=_env_int("SC_CURATION_MIN_CELLS", 100),
         min_genes=_env_int("SC_CURATION_MIN_GENES", 5000),
+        min_genes_per_cell=_env_int("SC_CURATION_MIN_GENES_PER_CELL", 400),
     )
 
 
