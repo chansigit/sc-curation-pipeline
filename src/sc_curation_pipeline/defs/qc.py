@@ -281,7 +281,11 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
     # write (LLM path may stall on compute nodes without network).
     try:
         from sc_curation_pipeline.defs.metacols import identify_and_normalize
-        metacols = identify_and_normalize(adata, use_llm=curation.metacols_use_llm)
+        metacols = identify_and_normalize(
+            adata, use_llm=curation.metacols_use_llm,
+            provider=curation.metacols_provider, model=curation.metacols_model,
+            base_url=curation.metacols_base_url or None,
+            api_key_env=curation.metacols_api_key_env or None)
         adata.uns["metacols"] = json.dumps(metacols)
     except Exception as exc:  # noqa: BLE001 - role identification is non-fatal
         context.log.warning(f"stanmetacols identification failed: {exc!r}")

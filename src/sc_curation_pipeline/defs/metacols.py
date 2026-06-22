@@ -12,6 +12,8 @@ into a canonical column. The full ranking is returned for provenance (uns + Dags
 metadata).
 """
 
+import os
+
 import stanmetacols
 
 # Roles the pipeline normalizes. The numeric QC roles are excluded on purpose —
@@ -69,13 +71,24 @@ def normalize_roles(adata, result) -> dict:
     return {"method": result.method, "assigned": assigned, "ranking": ranking}
 
 
-def identify_and_normalize(adata, *, use_llm: bool = True) -> dict:
+def identify_and_normalize(adata, *, use_llm: bool = True, provider: str = "anthropic",
+                           model: str = "claude-opus-4-8", base_url: str | None = None,
+                           api_key_env: str | None = None) -> dict:
     """Rank the three metadata roles on ``adata`` and normalize confident picks.
 
     ``use_llm`` follows stanmetacols semantics: True tries the LLM and falls back to
     the offline heuristic if it is unavailable; False forces the deterministic
-    heuristic (no network/key). Requests only ``METACOL_ROLES`` to keep the prompt
-    small. Mutates ``adata.obs``; never writes files.
+    heuristic (no network/key). ``provider``/``model``/``base_url`` select the LLM
+    backend — provider ``"openai"`` targets any OpenAI-compatible endpoint (e.g.
+    Volcengine ARK / Doubao) via ``base_url``. ``api_key_env`` names the env var
+    holding the key (resolved here and passed to stanmetacols); if unset/empty the
+    backend's own default key var is used. Requests only ``METACOL_ROLES`` to keep
+    the prompt small. Mutates ``adata.obs``; never writes files.
     """
-    result = stanmetacols.rank_meta_columns(adata, roles=METACOL_ROLES, use_llm=use_llm)
+    api_key = os.environ.get(api_key_env) if api_key_env else None
+    result = stanmetacols.rank_meta_columns(
+        adata, roles=METACOL_ROLES, use_llm=use_llm,
+        provider=provider, model=model,
+        base_url=base_url or None, api_key=api_key,
+    )
     return normalize_roles(adata, result)

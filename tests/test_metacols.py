@@ -82,6 +82,16 @@ def test_single_celltype_column_not_duplicated_into_fine():
     assert "cell_type_fine" not in a.obs.columns          # not duplicated
 
 
+def test_provider_args_ignored_when_offline():
+    # provider/model/base_url/api_key_env are accepted but irrelevant with use_llm=False
+    # (offline heuristic); a missing api_key_env var must not crash.
+    a = _adata(pd.DataFrame({"cell_type": ["T", "B", "T", "B"]}))
+    summary = identify_and_normalize(
+        a, use_llm=False, provider="openai", model="doubao-x",
+        base_url="https://example/v1", api_key_env="NONEXISTENT_KEY_VAR_XYZ")
+    assert summary["method"] == "heuristic"
+
+
 def test_identify_and_normalize_offline_heuristic():
     # use_llm=False -> deterministic heuristic; no network / API key needed.
     rng = np.random.default_rng(0)

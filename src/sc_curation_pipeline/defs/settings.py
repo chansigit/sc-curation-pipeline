@@ -34,8 +34,17 @@ class CurationSettings(dg.ConfigurableResource):
     min_genes: int = 5000
     min_genes_per_cell: int = 400
     # Metadata-role identification (stanmetacols). True = LLM-first with heuristic
-    # fallback (needs ANTHROPIC_API_KEY + network); False = offline heuristic only.
+    # fallback; False = offline heuristic only.
     metacols_use_llm: bool = True
+    # LLM backend for metacols (used only when metacols_use_llm=True). provider
+    # "openai" targets any OpenAI-compatible endpoint (e.g. Volcengine ARK / Doubao)
+    # via metacols_base_url, with the key read from the env var named by
+    # metacols_api_key_env. Defaults are stanmetacols' Anthropic defaults; override
+    # in .env to use ARK (provider=openai, base_url=ark…, model=doubao…, key=ARK_API_KEY).
+    metacols_provider: str = "anthropic"
+    metacols_model: str = "claude-opus-4-8"
+    metacols_base_url: str = ""        # empty -> backend default
+    metacols_api_key_env: str = ""     # env var name holding the key (empty -> SDK default)
 
 
 def build_curation_settings() -> CurationSettings:
@@ -70,6 +79,10 @@ def build_curation_settings() -> CurationSettings:
         min_genes=_env_int("SC_CURATION_MIN_GENES", 5000),
         min_genes_per_cell=_env_int("SC_CURATION_MIN_GENES_PER_CELL", 400),
         metacols_use_llm=_env_bool("SC_CURATION_METACOLS_USE_LLM", True),
+        metacols_provider=os.getenv("SC_CURATION_METACOLS_PROVIDER", "anthropic"),
+        metacols_model=os.getenv("SC_CURATION_METACOLS_MODEL", "claude-opus-4-8"),
+        metacols_base_url=os.getenv("SC_CURATION_METACOLS_BASE_URL", ""),
+        metacols_api_key_env=os.getenv("SC_CURATION_METACOLS_API_KEY_ENV", ""),
     )
 
 
