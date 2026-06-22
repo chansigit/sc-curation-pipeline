@@ -67,6 +67,21 @@ def test_normalize_skips_below_threshold_non_single_and_missing():
     assert summary["ranking"]["cell_type_coarse"][0]["kind"] == "composite"
 
 
+def test_single_celltype_column_not_duplicated_into_fine():
+    # One cell-type column ranked top for BOTH celltype roles must land in only the
+    # higher-scoring role (coarse), never be duplicated into fine.
+    a = _adata(pd.DataFrame({"cell_type": ["T", "B", "T", "B"]}))
+    res = _FakeResult("heuristic", {
+        "sample": [],
+        "cell_type_coarse": [_cand("cell_type_coarse", "cell_type", score=0.84)],
+        "cell_type_fine": [_cand("cell_type_fine", "cell_type", score=0.70)],
+    })
+    summary = normalize_roles(a, res)
+    assert summary["assigned"] == {"cell_type_coarse": "cell_type"}
+    assert "cell_type_coarse" in a.obs.columns
+    assert "cell_type_fine" not in a.obs.columns          # not duplicated
+
+
 def test_identify_and_normalize_offline_heuristic():
     # use_llm=False -> deterministic heuristic; no network / API key needed.
     rng = np.random.default_rng(0)

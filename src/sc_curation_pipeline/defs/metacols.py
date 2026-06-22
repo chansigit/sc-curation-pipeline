@@ -19,6 +19,9 @@ import stanmetacols
 METACOL_ROLES = ["sample", "cell_type_coarse", "cell_type_fine"]
 # Assign a canonical column only when the top pick clears this score; weaker picks
 # (especially cell-type look-alikes) are recorded but not materialized into obs.
+# 0.5 is the midpoint of the 0..1 score: in the heuristic a cell-type column scores
+# 0.4*name + 0.4*vocab + 0.2*card_fit, so clearing 0.5 takes more than a single weak
+# (name-only or vocab-only) signal — it filters the most common false positives.
 MIN_ASSIGN_SCORE = 0.5
 
 
@@ -31,19 +34,36 @@ def _candidate_dict(c) -> dict:
 def normalize_roles(adata, result) -> dict:
     """Apply the assign policy to a stanmetacols result; mutate obs; return summary.
 
-    For each role the top-1 candidate is copied to ``obs[<role>]`` only when it is a
-    ``single`` column present in obs scoring >= ``MIN_ASSIGN_SCORE``. The source
+    A role's top-1 candidate qualifies when it is a ``single`` column present in obs
+    scoring >= ``MIN_ASSIGN_SCORE``. A given source column is then assigned to at
+    most ONE role — the highest-scoring one (ties favour the earlier role, i.e.
+    coarse over fine) — so a dataset carrying a single cell-type column is normalized
+    to ``cell_type_coarse`` only, NOT duplicated into ``cell_type_fine``. The source
     column is left untouched. Returns a JSON-serializable
     ``{"method", "assigned", "ranking"}`` (``assigned`` maps role -> source column).
     """
-    assigned: dict[str, str] = {}
+    # Collect qualifying top-1 picks per role, preserving METACOL_ROLES order.
+    picks: dict[str, tuple[str, float]] = {}
     for role in METACOL_ROLES:
         cand = result.top(role)
         if (cand is not None and cand.kind == "single"
                 and cand.score >= MIN_ASSIGN_SCORE
                 and cand.column in adata.obs.columns):
-            adata.obs[role] = adata.obs[cand.column].values  # canonical copy; source kept
-            assigned[role] = cand.column
+            picks[role] = (cand.column, float(cand.score))
+
+    # One source column -> one role (highest score; ties keep the earlier role,
+    # so a lone cell-type column lands in coarse and is not duplicated into fine).
+    winner: dict[str, str] = {}  # source column -> winning role
+    for role, (col, score) in picks.items():
+        if col not in winner or score > picks[winner[col]][1]:
+            winner[col] = role
+
+    assigned: dict[str, str] = {}
+    for role, (col, _) in picks.items():
+        if winner[col] == role:
+            adata.obs[role] = adata.obs[col].values  # canonical copy; source kept
+            assigned[role] = col
+
     ranking = {role: [_candidate_dict(c) for c in result.roles.get(role, [])]
                for role in METACOL_ROLES}
     return {"method": result.method, "assigned": assigned, "ranking": ranking}

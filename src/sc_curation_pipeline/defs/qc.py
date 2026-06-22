@@ -285,7 +285,7 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
         adata.uns["metacols"] = json.dumps(metacols)
     except Exception as exc:  # noqa: BLE001 - role identification is non-fatal
         context.log.warning(f"stanmetacols identification failed: {exc!r}")
-        metacols = {"method": f"⚠️ failed: {exc}", "assigned": {}}
+        metacols = {"method": f"⚠️ failed: {exc}", "assigned": {}, "ranking": {}}
 
     out_path = output_path_for(curation.output_dir, context.partition_key, path)
     try:

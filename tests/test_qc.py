@@ -169,6 +169,26 @@ def test_h5ad_qc_normalizes_metacols(tmp_path, write_adata):
     assert "cell_type_coarse" in back.obs.columns         # normalized canonical column
     meta = json.loads(back.uns["metacols"])               # full ranking recorded in uns
     assert meta["assigned"].get("cell_type_coarse") == "cell_type"
+    # a lone cell-type column is NOT duplicated into the fine role
+    assert "cell_type_fine" not in meta["assigned"]
+    assert "cell_type_fine" not in back.obs.columns
+
+
+def test_h5ad_qc_metacols_failure_non_fatal(tmp_path, write_adata, monkeypatch):
+    from sc_curation_pipeline.defs import metacols as mcmod
+    counts = _counts()
+    watch, out, folder, path, key, settings, inst = _setup(
+        tmp_path, "mcfail", sp.csr_matrix(counts), write_adata,
+        layers={"counts": sp.csr_matrix(counts)})
+
+    def _boom(*a, **k):
+        raise RuntimeError("metacols boom")
+    monkeypatch.setattr(mcmod, "identify_and_normalize", _boom)
+    res = _materialize(path, watch, out, key, settings, inst)
+    assert res.success is True                            # write must still succeed
+    md = res.asset_materializations_for_node("h5ad_qc")[0].metadata
+    assert "failed" in md["metacols_method"].value        # method records the failure
+    assert os.path.isfile(output_path_for(out, key, path))  # output still written
 
 
 def test_h5ad_qc_missing_species_fast_fail(tmp_path, write_adata):
