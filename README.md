@@ -175,7 +175,7 @@ $SC_CURATION_WATCH_DIR/
 
 ## 4. 启动 Dagster
 
-从项目目录,用 `dl2025` 的 `dg` 启动:
+先在项目目录用 `dl2025` 的 `dg` 把服务跑起来(**两种调试方式共用这一步**):
 
 ```bash
 export SC_CURATION_WATCH_DIR=/scratch/users/chensj16/<你的watch目录>
@@ -185,14 +185,24 @@ cd /scratch/users/chensj16/projects/eca-dagster-pipeline/sc-curation-pipeline
 
 > 如果你已经建好 `.env`(见上面「怎么设置这些变量」),上面那行 `export` 就能省掉——`dg dev` 会自动加载 `.env`。
 
-从本地电脑做端口转发看 UI(`dg dev` 跑在计算节点的 27182 端口):
+`dg dev` 跑在**计算节点**的 27182 端口。怎么看到 UI,按场景从下面两节里选一种。
+
+### 4.1 本机调试(SSH 端口转发)
+
+自己一个人临时看、不对外暴露,最简单也最安全。从本地电脑做端口转发到那个计算节点:
 
 ```bash
 ssh -L 27182:<计算节点名, 如 sh02-06n11>:27182 <你的SUNet>@login.sherlock.stanford.edu
 # 然后浏览器打开 http://localhost:27182
 ```
 
-**(或)用 ngrok 暴露到固定域名** —— 不想每次 SSH 转发的话,在**同一个计算节点**上另开一个终端跑(`dg dev` 继续开着):
+只要 SSH 还连着,本地的 `http://localhost:27182` 就指向计算节点上的 UI;断开转发即收回,不会留下任何对外入口。
+
+### 4.2 ngrok 公网调试(固定域名)
+
+想从任意设备访问、或分享给别人,不想每次都 SSH 转发时用。
+
+**方式一(手动)**:`dg dev` 继续在前台开着,在**同一个计算节点**上另开一个终端跑 ngrok:
 ```bash
 # authtoken 一次性配置(~/.config/ngrok/ngrok.yml 里已有则跳过):
 # ngrok config add-authtoken <你的token>
@@ -202,29 +212,32 @@ ngrok http 27182 --domain=csj.ngrok.io --basic-auth "你:一个强密码"
 ```
 然后任意地方浏览器打开 https://csj.ngrok.io 。
 
-或用仓库里的脚本 `scripts/serve-ui.sh` —— **一键把 `dg dev`(后台)+ ngrok 隧道一起拉起/关掉**,`dg dev` 不再占着终端(配置走 `SC_UI_PORT` / `SC_UI_NGROK_DOMAIN` / `SC_UI_BASIC_AUTH`;run 历史/已登记样本存到项目内 gitignored 的 `.dagster_home/`,重启不丢):
+**方式二(脚本,推荐)**:用仓库里的 `scripts/serve-ui.sh` —— **一键把 `dg dev`(后台)+ ngrok 隧道一起拉起/关掉**,`dg dev` 不再占着终端(配置走 `SC_UI_PORT` / `SC_UI_NGROK_DOMAIN` / `SC_UI_BASIC_AUTH`;run 历史/已登记样本存到项目内 gitignored 的 `.dagster_home/`,重启不丢)。脚本自己会在后台拉起 `dg dev`,所以走这条时**不必**先手动跑上面那条前台 `dg dev`:
 ```bash
 SC_UI_BASIC_AUTH="csj:一个强密码" scripts/serve-ui.sh up   # 启动(后台)
 scripts/serve-ui.sh status                                # 看状态 + 公网 URL
 scripts/serve-ui.sh down                                  # 断开
 ```
 
-> ⚠️ 注意:
+> ⚠️ 公网暴露注意(仅 4.2 相关):
 > - **Dagster UI 默认没有登录认证**,而它能触发/取消 run(等于在集群上跑代码)。公开到公网前**务必加 `--basic-auth`(或 `--oauth`)**,否则拿到 URL 的人就能操作你的 pipeline;用完 `Ctrl-C` 关掉隧道。
 > - 从共享 HPC 对公网暴露服务,请确认符合 Stanford SRC 使用规范。
 > - 小坑:ngrok 域名 DNS 会先给 IPv6(本节点 IPv6 不通),ngrok 自动回退 IPv4(已验证可连);隧道起得慢等几秒即可。
 
-**打开 sensor**:UI 里 **Automation → `watch_h5ad_dir`**,开关拨到 **ON**(它默认是 `STOPPED`,不打开不会扫描)。
+### 4.3 打开 sensor
+
+不管用哪种方式进 UI,最后都要:**Automation → `watch_h5ad_dir`**,开关拨到 **ON**(它默认是 `STOPPED`,不打开不会扫描)。
 
 ---
 
 ## 5. 端到端走一遍
 
 ```bash
-# 造一个样本(注意顺序:先 h5ad,后 .done)
+# 造一个样本(注意顺序:先 h5ad 和 .species,最后才放 .done)
 mkdir -p "$SC_CURATION_WATCH_DIR/demo_sample"
 cp /path/to/your.h5ad "$SC_CURATION_WATCH_DIR/demo_sample/demo.h5ad"
-touch "$SC_CURATION_WATCH_DIR/demo_sample/.done"
+touch "$SC_CURATION_WATCH_DIR/demo_sample/.species.hs"   # 物种:人=hs(必需,见第 3 节)
+touch "$SC_CURATION_WATCH_DIR/demo_sample/.done"         # 最后放:它一出现 sensor 就会触发
 ```
 
 - 一个 tick(≤30s)内,sensor 注册分区 `demo_sample` 并触发一次 `h5ad_qc` run。
@@ -232,7 +245,10 @@ touch "$SC_CURATION_WATCH_DIR/demo_sample/.done"
   - **Metadata**:`output_path`、`counts_source`、`n_cells` / `n_genes_detected` / `n_vars` / `total_counts` / 每细胞中位 `counts`/`genes` / `sparsity` / `layers` / `obsm`,以及 `qc_plots`(内嵌图)。
   - 不达 `min_cells` / `min_genes` 阈值的样本会**快速失败(红 run)、不写输出**,原因写在 metadata。
   - 通过阈值后,标准化 `.h5ad` 写入 `SC_CURATION_OUTPUT_DIR`。
-- 试验失败路径:放一个损坏的 h5ad(+ `.done`)→ 那个分区的 run 变红,原因写在 metadata;或用低细胞数样本触发硬性阈值快速失败。
+- 试验失败路径:
+  - **忘放 `.species.<code>`**(只 `touch .done`)→ run 变红,原因 `missing or ambiguous .species.<code> marker`,不重试、不写输出。
+  - 放一个损坏的 h5ad(+ 两个标记)→ 那个分区的 run 变红,原因写在 metadata。
+  - 用低细胞数样本触发 `min_cells` / `min_genes` 硬性阈值快速失败。
 
 ---
 
