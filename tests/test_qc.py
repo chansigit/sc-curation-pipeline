@@ -27,12 +27,16 @@ def test_compute_count_qc_dense():
     assert qc["n_vars"] == 3
     assert qc["n_genes_detected"] == 3  # all 3 genes seen in >=1 cell
     assert qc["total_counts"] == 6.0
-    # mito_pct / ribo_pct / density removed from metadata; sparsity kept.
+    # raw per-cell mito/hb stay under per_cell; top-level exposes only medians.
     assert "mito_pct" not in qc and "ribo_pct" not in qc and "density" not in qc
     assert "sparsity" in qc
-    # per-cell mito is still computed (the QC plot uses it).
+    # per-cell mito/hb are computed (obs + the QC plot use them).
     np.testing.assert_array_equal(qc["per_cell"]["counts"], [3.0, 3.0])
     np.testing.assert_allclose(qc["per_cell"]["mito_pct"], [0.0, 100.0])
+    np.testing.assert_allclose(qc["per_cell"]["hb_pct"], [0.0, 0.0])  # no species -> no hb set
+    # species-aware medians now reported as metadata numbers
+    assert qc["median_pct_counts_mt"] == 50.0  # median([0, 100])
+    assert qc["median_pct_counts_hb"] == 0.0
 
 
 def test_compute_count_qc_species_aware_mito_fly():
@@ -46,6 +50,18 @@ def test_compute_count_qc_species_aware_mito_fly():
     # default path (no species) uses MT- prefix -> catches none of the mt: genes
     qc_default = compute_count_qc(counts, var)
     np.testing.assert_array_equal(qc_default["per_cell"]["mito_pct"], [0.0, 0.0])
+
+
+def test_compute_count_qc_species_aware_hb():
+    # Human hemoglobin (HBB/HBA1) is detected via stangene.hb_mask; the generic
+    # no-species path has no hemoglobin set, so it catches none.
+    counts = np.array([[1.0, 4.0, 0.0], [0.0, 0.0, 3.0]])
+    var = ["ACTB", "HBB", "HBA1"]
+    qc_hs = compute_count_qc(counts, var, species="hs")
+    # cell0: HBB 4 of total 5 -> 80%; cell1: HBA1 3 of 3 -> 100%
+    np.testing.assert_allclose(qc_hs["per_cell"]["hb_pct"], [80.0, 100.0])
+    qc_default = compute_count_qc(counts, var)
+    np.testing.assert_array_equal(qc_default["per_cell"]["hb_pct"], [0.0, 0.0])
 
 
 def test_compute_count_qc_detected_excludes_allzero_genes():
@@ -94,9 +110,15 @@ def test_h5ad_qc_writes_output_and_qc(tmp_path, write_adata):
     assert md["species"].value == "human"            # .species.hs -> human
     assert md["harmonized"].value is True
     assert "mapping_rate" in md
+    assert md["median_pct_counts_mt"].value == 0.0   # GENE* names -> no mito/hb
+    assert md["median_pct_counts_hb"].value == 0.0
     out_path = output_path_for(out, key, path)
     assert os.path.isfile(out_path)              # written to output dir
     assert os.path.isfile(path)                  # source still present, untouched
+    # per-cell contamination fractions land in the written file's obs
+    import anndata
+    back = anndata.read_h5ad(out_path)
+    assert "pct_counts_mt" in back.obs.columns and "pct_counts_hb" in back.obs.columns
 
 
 def test_h5ad_qc_renames_var_to_canonical_symbols(tmp_path, write_adata):

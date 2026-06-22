@@ -48,6 +48,7 @@ def render_qc_panel(
     counts: np.ndarray,
     genes: np.ndarray,
     mito_pct: np.ndarray,
+    hb_pct: np.ndarray,
     *,
     sample_label: str,
     scatter_cap: int = SCATTER_MAX_POINTS,
@@ -55,13 +56,15 @@ def render_qc_panel(
     """Render the QC panel for one sample as a markdown string with an inline PNG.
 
     Layout (single figure): row 1 = three violins (total_counts, genes_per_cell,
-    mito_pct); row 2 = two scatters (counts x mito%, counts x genes). The three
-    inputs are per-cell 1-D arrays of equal length (n_cells). Returns
-    ``"![qc ...](data:image/png;base64,...)"``. Writes no files.
+    mito_pct); row 2 = two scatters (counts x mito%, counts x genes) + an
+    hb_pct violin in the 6th cell. The four inputs are per-cell 1-D arrays of
+    equal length (n_cells). Returns ``"![qc ...](data:image/png;base64,...)"``.
+    Writes no files.
     """
     counts = np.asarray(counts, dtype=float)
     genes = np.asarray(genes, dtype=float)
     mito_pct = np.asarray(mito_pct, dtype=float)
+    hb_pct = np.asarray(hb_pct, dtype=float)
     n = counts.shape[0]
 
     fig, axes = plt.subplots(2, 3, figsize=(12, 7))
@@ -80,7 +83,7 @@ def render_qc_panel(
         axes[1, 1].set_xlabel("total_counts")
         axes[1, 1].set_ylabel("genes_per_cell")
         axes[1, 1].set_title("counts x genes" + shown)
-        axes[1, 2].axis("off")  # 6th cell of the 2x3 grid is unused
+        _violin(axes[1, 2], hb_pct, "hb_pct")
 
         fig.suptitle(f"QC: {sample_label}  (n_cells={n:,})")
         fig.tight_layout(rect=(0, 0, 1, 0.96))

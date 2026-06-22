@@ -20,7 +20,8 @@ def test_render_qc_panel_returns_inline_png():
     counts = rng.integers(100, 5000, size=200).astype(float)
     genes = rng.integers(50, 2000, size=200).astype(float)
     mito_pct = rng.uniform(0, 30, size=200)
-    md = render_qc_panel(counts, genes, mito_pct, sample_label="GSE1_sampleA")
+    hb_pct = rng.uniform(0, 10, size=200)
+    md = render_qc_panel(counts, genes, mito_pct, hb_pct, sample_label="GSE1_sampleA")
     assert "data:image/png;base64," in md
     assert _decode_png(md).startswith(PNG_MAGIC)
 
@@ -30,13 +31,13 @@ def test_render_qc_panel_constant_columns_do_not_crash():
     # must still render a valid PNG (the flat-marker fallback).
     n = 50
     zeros = np.zeros(n)
-    md = render_qc_panel(zeros, zeros, zeros, sample_label="empty")
+    md = render_qc_panel(zeros, zeros, zeros, zeros, sample_label="empty")
     assert _decode_png(md).startswith(PNG_MAGIC)
 
 
 def test_render_qc_panel_empty_sample_does_not_crash():
     empty = np.array([], dtype=float)
-    md = render_qc_panel(empty, empty, empty, sample_label="nocells")
+    md = render_qc_panel(empty, empty, empty, empty, sample_label="nocells")
     assert _decode_png(md).startswith(PNG_MAGIC)
 
 

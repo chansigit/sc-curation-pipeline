@@ -28,12 +28,23 @@ def count_n_genes_detected(counts) -> int:
     return int(((C != 0).sum(axis=0) > 0).sum())
 
 
+def _masked_sum_per_cell(C, mask, is_sparse, n_cells) -> np.ndarray:
+    """Per-cell summed counts over the columns selected by ``mask`` (0s if empty)."""
+    if not mask.any():
+        return np.zeros(n_cells)
+    if is_sparse:
+        return np.asarray(C[:, mask].sum(axis=1)).ravel()
+    return C[:, mask].sum(axis=1)
+
+
 def compute_count_qc(counts, var_names, species=None) -> dict:
     """QC metrics computed on an in-memory counts matrix (sparse or dense).
 
-    ``species`` (a stangene code/name) selects species-aware mitochondrial gene
-    detection via ``stangene.mito_mask``; without it, a generic ``MT-`` prefix is
-    used. Mito is only consumed by the QC plot.
+    ``species`` (a stangene code/name) selects species-aware mitochondrial and
+    hemoglobin gene detection via ``stangene.mito_mask`` / ``stangene.hb_mask``.
+    Without a species, mito falls back to a generic ``MT-`` prefix and hb is left
+    empty (hemoglobin symbols are too species-specific for a generic rule). Both
+    fractions are reported per cell (for obs + the QC plot) and as medians.
     """
     is_sparse = sp.issparse(counts)
     C = counts.tocsr() if is_sparse else np.asarray(counts)
@@ -41,21 +52,22 @@ def compute_count_qc(counts, var_names, species=None) -> dict:
 
     if species:
         mt_mask = stangene.mito_mask(var_names, species)
+        hb_mask = stangene.hb_mask(var_names, species)
     else:
         up = np.char.upper(np.asarray([str(v) for v in var_names], dtype=str))
         mt_mask = np.char.startswith(up, "MT-")
+        hb_mask = np.zeros(len(up), dtype=bool)  # no generic hemoglobin set without a species
 
     if is_sparse:
         counts_per_cell = np.asarray(C.sum(axis=1)).ravel().astype(np.float64)
         genes_per_cell = C.getnnz(axis=1).astype(np.float64)
         nnz_total = int(C.nnz)
-        mito_per_cell = (np.asarray(C[:, mt_mask].sum(axis=1)).ravel()
-                         if mt_mask.any() else np.zeros(n_cells))
     else:
         counts_per_cell = C.sum(axis=1).astype(np.float64)
         genes_per_cell = (C != 0).sum(axis=1).astype(np.float64)
         nnz_total = int((C != 0).sum())
-        mito_per_cell = C[:, mt_mask].sum(axis=1) if mt_mask.any() else np.zeros(n_cells)
+    mito_per_cell = _masked_sum_per_cell(C, mt_mask, is_sparse, n_cells)
+    hb_per_cell = _masked_sum_per_cell(C, hb_mask, is_sparse, n_cells)
 
     total = n_cells * n_vars
     total_counts = float(counts_per_cell.sum())
@@ -63,6 +75,8 @@ def compute_count_qc(counts, var_names, species=None) -> dict:
     with np.errstate(divide="ignore", invalid="ignore"):
         mito_pct_per_cell = np.where(counts_per_cell > 0,
                                      100.0 * mito_per_cell / counts_per_cell, 0.0)
+        hb_pct_per_cell = np.where(counts_per_cell > 0,
+                                   100.0 * hb_per_cell / counts_per_cell, 0.0)
     return {
         "n_cells": n_cells,
         "n_vars": n_vars,
@@ -70,8 +84,11 @@ def compute_count_qc(counts, var_names, species=None) -> dict:
         "total_counts": total_counts,
         "median_counts_per_cell": float(np.median(counts_per_cell)) if n_cells else 0.0,
         "median_genes_per_cell": float(np.median(genes_per_cell)) if n_cells else 0.0,
+        "median_pct_counts_mt": float(np.median(mito_pct_per_cell)) if n_cells else 0.0,
+        "median_pct_counts_hb": float(np.median(hb_pct_per_cell)) if n_cells else 0.0,
         "sparsity": (1.0 - nnz_total / total) if total else 0.0,
-        "per_cell": {"counts": counts_per_cell, "genes": genes_per_cell, "mito_pct": mito_pct_per_cell},
+        "per_cell": {"counts": counts_per_cell, "genes": genes_per_cell,
+                     "mito_pct": mito_pct_per_cell, "hb_pct": hb_pct_per_cell},
     }
 
 
@@ -251,6 +268,11 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
     harmon_stats = _harmonization_stats(harmon.mapping_table)
 
     qc = compute_count_qc(counts, adata.var_names, species=species)
+    # Per-cell contamination fractions onto obs (scanpy-style names) so they ride
+    # into the written file — and, via the row subset, into downstream cell_filtered.
+    # Row order matches: harmonization only relabels var, counts rows == adata.obs.
+    adata.obs["pct_counts_mt"] = qc["per_cell"]["mito_pct"]
+    adata.obs["pct_counts_hb"] = qc["per_cell"]["hb_pct"]
 
     out_path = output_path_for(curation.output_dir, context.partition_key, path)
     try:
@@ -266,7 +288,8 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
         from sc_curation_pipeline.defs.plots import render_qc_panel
         pc = qc["per_cell"]
         qc_plots = dg.MetadataValue.md(render_qc_panel(
-            pc["counts"], pc["genes"], pc["mito_pct"], sample_label=context.partition_key))
+            pc["counts"], pc["genes"], pc["mito_pct"], pc["hb_pct"],
+            sample_label=context.partition_key))
     except Exception as exc:  # noqa: BLE001 - plotting is non-fatal
         context.log.warning(f"QC plot rendering failed: {exc!r}")
         qc_plots = dg.MetadataValue.md(f"⚠️ 图未生成: {exc}")
@@ -289,6 +312,8 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
             "total_counts": dg.MetadataValue.float(qc["total_counts"]),
             "median_counts_per_cell": dg.MetadataValue.float(qc["median_counts_per_cell"]),
             "median_genes_per_cell": dg.MetadataValue.float(qc["median_genes_per_cell"]),
+            "median_pct_counts_mt": dg.MetadataValue.float(qc["median_pct_counts_mt"]),
+            "median_pct_counts_hb": dg.MetadataValue.float(qc["median_pct_counts_hb"]),
             "sparsity": dg.MetadataValue.float(qc["sparsity"]),
             "layers": dg.MetadataValue.json(list(std.layers.keys())),
             "obsm": dg.MetadataValue.json(list(std.obsm.keys())),
