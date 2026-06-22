@@ -84,12 +84,14 @@ def _materialize(path, watch, out, key, settings, instance, species="hs"):
     )
 
 
-def _setup(tmp_path, folder_name, X, write_adata, *, layers=None, min_cells=100, min_genes=5000, var_names=None):
+def _setup(tmp_path, folder_name, X, write_adata, *, layers=None, min_cells=100, min_genes=5000, var_names=None, obs=None):
     watch = str(tmp_path / "watch"); out = str(tmp_path / "out")
     folder = os.path.join(watch, folder_name)
-    path = write_adata(os.path.join(folder, "a.h5ad"), X, var_names=var_names, layers=layers)
+    path = write_adata(os.path.join(folder, "a.h5ad"), X, var_names=var_names, layers=layers, obs=obs)
     key = partition_key_for(watch, folder)
-    settings = CurationSettings(watch_dir=watch, output_dir=out, min_cells=min_cells, min_genes=min_genes)
+    # metacols_use_llm=False -> deterministic offline heuristic (no network/key) in tests
+    settings = CurationSettings(watch_dir=watch, output_dir=out, min_cells=min_cells,
+                                min_genes=min_genes, metacols_use_llm=False)
     inst = dg.DagsterInstance.ephemeral()
     inst.add_dynamic_partitions(h5ad_partitions.name, [key])
     return watch, out, folder, path, key, settings, inst
@@ -143,6 +145,30 @@ def test_h5ad_qc_renames_var_to_canonical_symbols(tmp_path, write_adata):
     assert "FOOBAR_NOTAGENE" in list(back.var_names)
     assert "original_feature_name" in back.var.columns
     assert list(back.var["original_feature_name"]) == names
+
+
+def test_h5ad_qc_normalizes_metacols(tmp_path, write_adata):
+    import json
+    import anndata
+    counts = _counts()                       # 200 cells, 8000 genes (passes gates)
+    n = counts.shape[0]
+    lognorm = sp.csr_matrix(np.log1p(counts / counts.sum(1, keepdims=True) * 1e4))
+    rng = np.random.default_rng(1)
+    cell_type = rng.choice(["T cell", "B cell", "NK cell", "Monocyte"], size=n)
+    watch, out, folder, path, key, settings, inst = _setup(
+        tmp_path, "metacols_s", lognorm, write_adata,
+        layers={"counts": sp.csr_matrix(counts)}, obs={"cell_type": list(cell_type)})
+    res = _materialize(path, watch, out, key, settings, inst)
+    assert res.success, res
+
+    md = res.asset_materializations_for_node("h5ad_qc")[0].metadata
+    assert md["metacols_method"].value == "heuristic"     # _setup forces use_llm=False
+    assert md["metacols_cell_type_coarse"].value == "cell_type"
+
+    back = anndata.read_h5ad(output_path_for(out, key, path))
+    assert "cell_type_coarse" in back.obs.columns         # normalized canonical column
+    meta = json.loads(back.uns["metacols"])               # full ranking recorded in uns
+    assert meta["assigned"].get("cell_type_coarse") == "cell_type"
 
 
 def test_h5ad_qc_missing_species_fast_fail(tmp_path, write_adata):

@@ -73,13 +73,16 @@ def make_sparse_counts():
 @pytest.fixture
 def write_adata():
     """Write an h5ad with given X and optional layers/raw. Returns the path."""
-    def _make(path, X, *, var_names=None, layers=None, raw_X=None, raw_var_names=None):
+    def _make(path, X, *, var_names=None, layers=None, raw_X=None, raw_var_names=None, obs=None):
         n_obs, n_vars = X.shape
         if var_names is None:
             var_names = [f"GENE{i}" for i in range(n_vars)]
         adata = ad.AnnData(X=X)
         adata.var_names = list(var_names)
         adata.obs_names = [f"cell{i}" for i in range(n_obs)]
+        if obs:
+            for k, v in obs.items():
+                adata.obs[k] = list(v)
         if layers:
             for k, v in layers.items():
                 adata.layers[k] = v

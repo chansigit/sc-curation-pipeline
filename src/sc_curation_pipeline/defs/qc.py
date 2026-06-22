@@ -1,4 +1,5 @@
 import glob
+import json
 import os
 
 import dagster as dg
@@ -274,6 +275,18 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
     adata.obs["pct_counts_mt"] = qc["per_cell"]["mito_pct"]
     adata.obs["pct_counts_hb"] = qc["per_cell"]["hb_pct"]
 
+    # Identify standard metadata roles in obs (stanmetacols) and normalize confident
+    # picks to canonical columns (sample / cell_type_*); record the full ranking in
+    # uns. Non-fatal: a stanmetacols/LLM hiccup must never block the standardized
+    # write (LLM path may stall on compute nodes without network).
+    try:
+        from sc_curation_pipeline.defs.metacols import identify_and_normalize
+        metacols = identify_and_normalize(adata, use_llm=curation.metacols_use_llm)
+        adata.uns["metacols"] = json.dumps(metacols)
+    except Exception as exc:  # noqa: BLE001 - role identification is non-fatal
+        context.log.warning(f"stanmetacols identification failed: {exc!r}")
+        metacols = {"method": f"⚠️ failed: {exc}", "assigned": {}}
+
     out_path = output_path_for(curation.output_dir, context.partition_key, path)
     try:
         std = build_standardized_adata(adata, counts, source=counts_source)
@@ -305,6 +318,13 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
             "n_genes_mapped": dg.MetadataValue.int(harmon_stats["n_genes_mapped"]),
             "n_unmapped": dg.MetadataValue.int(harmon_stats["n_unmapped"]),
             "mapping_rate": dg.MetadataValue.float(harmon_stats["mapping_rate"]),
+            "metacols_method": dg.MetadataValue.text(metacols["method"]),
+            "metacols_sample": dg.MetadataValue.text(
+                metacols.get("assigned", {}).get("sample", "—")),
+            "metacols_cell_type_coarse": dg.MetadataValue.text(
+                metacols.get("assigned", {}).get("cell_type_coarse", "—")),
+            "metacols_cell_type_fine": dg.MetadataValue.text(
+                metacols.get("assigned", {}).get("cell_type_fine", "—")),
             "qc_plots": qc_plots,
             "n_cells": dg.MetadataValue.int(qc["n_cells"]),
             "n_genes_detected": dg.MetadataValue.int(qc["n_genes_detected"]),

@@ -14,6 +14,14 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Bool from env: 1/true/yes/on -> True, 0/false/no/off -> False, else default."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 class CurationSettings(dg.ConfigurableResource):
     """Env-driven configuration for the h5ad curation + QC pipeline."""
 
@@ -25,6 +33,9 @@ class CurationSettings(dg.ConfigurableResource):
     min_cells: int = 100
     min_genes: int = 5000
     min_genes_per_cell: int = 400
+    # Metadata-role identification (stanmetacols). True = LLM-first with heuristic
+    # fallback (needs ANTHROPIC_API_KEY + network); False = offline heuristic only.
+    metacols_use_llm: bool = True
 
 
 def build_curation_settings() -> CurationSettings:
@@ -58,6 +69,7 @@ def build_curation_settings() -> CurationSettings:
         min_cells=_env_int("SC_CURATION_MIN_CELLS", 100),
         min_genes=_env_int("SC_CURATION_MIN_GENES", 5000),
         min_genes_per_cell=_env_int("SC_CURATION_MIN_GENES_PER_CELL", 400),
+        metacols_use_llm=_env_bool("SC_CURATION_METACOLS_USE_LLM", True),
     )
 
 
