@@ -9,7 +9,7 @@ stanmetacols *ranks* obs columns for every role but does not decide. This module
   (``NORMALIZE_ROLES``): for each, when the top-1 candidate is a plain ``single``
   column present in obs and scored confidently enough, it is copied to a canonical
   obs column of the same name. The numeric QC roles (pct_mt/pct_hb/…) are shown but
-  never written — h5ad_qc computes pct_counts_mt / pct_counts_hb itself.
+  never written — standardized_h5ad computes pct_counts_mt / pct_counts_hb itself.
 Composite / barcode candidates and low-confidence picks are recorded but NOT turned
 into a canonical column.
 """

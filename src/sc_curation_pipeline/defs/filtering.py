@@ -13,13 +13,13 @@ from sc_curation_pipeline.defs.filter_cells import filter_cells_by_genes, filter
 @dg.asset(
     partitions_def=h5ad_partitions,
     group_name="curation",
-    deps=["h5ad_qc"],
+    deps=["standardized_h5ad"],
     retry_policy=dg.RetryPolicy(max_retries=2),
 )
-def cell_filtered(context: dg.AssetExecutionContext, curation: CurationSettings):
+def initially_filtered_h5ad(context: dg.AssetExecutionContext, curation: CurationSettings):
     """Filter cells by detected genes on the standardized .h5ad; write *_filtered.h5ad.
 
-    Reads the upstream standardized file (written by h5ad_qc), keeps cells whose
+    Reads the upstream standardized file (written by standardized_h5ad), keeps cells whose
     counts layer has >= min_genes_per_cell detected genes, and writes a separate
     *_filtered.h5ad to the same OUTPUT_DIR. The upstream full-cell file is kept.
     """

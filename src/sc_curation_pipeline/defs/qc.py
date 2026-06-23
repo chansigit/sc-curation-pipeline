@@ -209,7 +209,7 @@ def _harmonization_stats(mapping_table) -> dict:
     group_name="curation",
     retry_policy=dg.RetryPolicy(max_retries=2),
 )
-def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
+def standardized_h5ad(context: dg.AssetExecutionContext, curation: CurationSettings):
     """Standardize one sample (counts layer + lognorm X), write it out, QC on counts."""
     path = resolve_h5ad_path(context, curation)
     if not h5py.is_hdf5(path):
@@ -270,7 +270,7 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
 
     qc = compute_count_qc(counts, adata.var_names, species=species)
     # Per-cell contamination fractions onto obs (scanpy-style names) so they ride
-    # into the written file — and, via the row subset, into downstream cell_filtered.
+    # into the written file — and, via the row subset, into downstream initially_filtered_h5ad.
     # Row order matches: harmonization only relabels var, counts rows == adata.obs.
     adata.obs["pct_counts_mt"] = qc["per_cell"]["mito_pct"]
     adata.obs["pct_counts_hb"] = qc["per_cell"]["hb_pct"]
@@ -342,9 +342,9 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
     )
 
 
-h5ad_qc_job = dg.define_asset_job(
-    name="h5ad_qc_job",
-    # Each discovered sample runs the full chain in one run: h5ad_qc (standardize +
-    # write) then its downstream cell_filtered (read the file, filter cells).
-    selection=dg.AssetSelection.assets("h5ad_qc", "cell_filtered"),
+standardized_h5ad_job = dg.define_asset_job(
+    name="standardized_h5ad_job",
+    # Each discovered sample runs the full chain in one run: standardized_h5ad (standardize +
+    # write) then its downstream initially_filtered_h5ad (read the file, filter cells).
+    selection=dg.AssetSelection.assets("standardized_h5ad", "initially_filtered_h5ad"),
 )

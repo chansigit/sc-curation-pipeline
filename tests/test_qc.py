@@ -5,7 +5,7 @@ import numpy as np
 import scipy.sparse as sp
 
 from sc_curation_pipeline.defs.qc import (
-    compute_count_qc, h5ad_qc, h5ad_qc_job, output_path_for,
+    compute_count_qc, standardized_h5ad, standardized_h5ad_job, output_path_for,
 )
 from sc_curation_pipeline.defs.settings import CurationSettings, partition_key_for
 from sc_curation_pipeline.defs.partitions import h5ad_partitions
@@ -78,7 +78,7 @@ def _materialize(path, watch, out, key, settings, instance, species="hs"):
     if species is not None:
         tags["sc/species"] = species
     return dg.materialize(
-        [h5ad_qc], partition_key=key, instance=instance,
+        [standardized_h5ad], partition_key=key, instance=instance,
         resources={"curation": settings}, tags=tags,
         raise_on_error=False,
     )
@@ -97,7 +97,7 @@ def _setup(tmp_path, folder_name, X, write_adata, *, layers=None, min_cells=100,
     return watch, out, folder, path, key, settings, inst
 
 
-def test_h5ad_qc_writes_output_and_qc(tmp_path, write_adata):
+def test_standardized_h5ad_writes_output_and_qc(tmp_path, write_adata):
     counts = _counts()
     lognorm = sp.csr_matrix(np.log1p(counts / counts.sum(1, keepdims=True) * 1e4))
     watch, out, folder, path, key, settings, inst = _setup(
@@ -105,7 +105,7 @@ def test_h5ad_qc_writes_output_and_qc(tmp_path, write_adata):
     res = _materialize(path, watch, out, key, settings, inst)
     assert res.success
 
-    md = res.asset_materializations_for_node("h5ad_qc")[0].metadata
+    md = res.asset_materializations_for_node("standardized_h5ad")[0].metadata
     assert md["n_cells"].value == 200
     assert "data:image/png;base64," in md["qc_plots"].value
     assert md["counts_source"].value == "layer:counts"
@@ -123,7 +123,7 @@ def test_h5ad_qc_writes_output_and_qc(tmp_path, write_adata):
     assert "pct_counts_mt" in back.obs.columns and "pct_counts_hb" in back.obs.columns
 
 
-def test_h5ad_qc_renames_var_to_canonical_symbols(tmp_path, write_adata):
+def test_standardized_h5ad_renames_var_to_canonical_symbols(tmp_path, write_adata):
     import anndata
     # Real human symbols: TP53 (exact), p53 (alias -> TP53), plus an unmapped one.
     names = ["TP53", "p53", "FOOBAR_NOTAGENE"]
@@ -135,7 +135,7 @@ def test_h5ad_qc_renames_var_to_canonical_symbols(tmp_path, write_adata):
     res = _materialize(path, watch, out, key, settings, inst, species="hs")
     assert res.success, res
 
-    md = res.asset_materializations_for_node("h5ad_qc")[0].metadata
+    md = res.asset_materializations_for_node("standardized_h5ad")[0].metadata
     assert md["species"].value == "human"
     assert md["n_genes_mapped"].value >= 2  # TP53 + p53 both resolve to TP53
 
@@ -147,7 +147,7 @@ def test_h5ad_qc_renames_var_to_canonical_symbols(tmp_path, write_adata):
     assert list(back.var["original_feature_name"]) == names
 
 
-def test_h5ad_qc_normalizes_metacols(tmp_path, write_adata):
+def test_standardized_h5ad_normalizes_metacols(tmp_path, write_adata):
     import json
     import anndata
     counts = _counts()                       # 200 cells, 8000 genes (passes gates)
@@ -161,7 +161,7 @@ def test_h5ad_qc_normalizes_metacols(tmp_path, write_adata):
     res = _materialize(path, watch, out, key, settings, inst)
     assert res.success, res
 
-    md = res.asset_materializations_for_node("h5ad_qc")[0].metadata
+    md = res.asset_materializations_for_node("standardized_h5ad")[0].metadata
     assert md["metacols_method"].value == "heuristic"     # _setup forces use_llm=False
     # the parse result is rendered as a markdown table listing every role
     result_md = md["metacols_result"].value
@@ -177,7 +177,7 @@ def test_h5ad_qc_normalizes_metacols(tmp_path, write_adata):
     assert "cell_type_fine" not in back.obs.columns
 
 
-def test_h5ad_qc_metacols_failure_non_fatal(tmp_path, write_adata, monkeypatch):
+def test_standardized_h5ad_metacols_failure_non_fatal(tmp_path, write_adata, monkeypatch):
     from sc_curation_pipeline.defs import metacols as mcmod
     counts = _counts()
     watch, out, folder, path, key, settings, inst = _setup(
@@ -189,12 +189,12 @@ def test_h5ad_qc_metacols_failure_non_fatal(tmp_path, write_adata, monkeypatch):
     monkeypatch.setattr(mcmod, "identify_and_normalize", _boom)
     res = _materialize(path, watch, out, key, settings, inst)
     assert res.success is True                            # write must still succeed
-    md = res.asset_materializations_for_node("h5ad_qc")[0].metadata
+    md = res.asset_materializations_for_node("standardized_h5ad")[0].metadata
     assert "failed" in md["metacols_method"].value        # method records the failure
     assert os.path.isfile(output_path_for(out, key, path))  # output still written
 
 
-def test_h5ad_qc_missing_species_fast_fail(tmp_path, write_adata):
+def test_standardized_h5ad_missing_species_fast_fail(tmp_path, write_adata):
     counts = _counts()
     watch, out, folder, path, key, settings, inst = _setup(
         tmp_path, "nospecies", sp.csr_matrix(counts), write_adata,
@@ -202,36 +202,36 @@ def test_h5ad_qc_missing_species_fast_fail(tmp_path, write_adata):
     # no sc/species tag AND no .species.* marker in the folder -> fast-fail
     res = _materialize(path, watch, out, key, settings, inst, species=None)
     assert res.success is False
-    msg = [e for e in res.get_step_failure_events() if e.step_key == "h5ad_qc"][0].event_specific_data.error.message
+    msg = [e for e in res.get_step_failure_events() if e.step_key == "standardized_h5ad"][0].event_specific_data.error.message
     assert ".species." in msg
     assert not os.path.isfile(output_path_for(out, key, path))
 
 
-def test_h5ad_qc_rejects_too_few_cells(tmp_path, write_adata):
+def test_standardized_h5ad_rejects_too_few_cells(tmp_path, write_adata):
     counts = _counts(n=10)  # < min_cells 100
     watch, out, folder, path, key, settings, inst = _setup(
         tmp_path, "tiny", sp.csr_matrix(counts), write_adata,
         layers={"counts": sp.csr_matrix(counts)}, min_cells=100, min_genes=1)
     res = _materialize(path, watch, out, key, settings, inst)
     assert res.success is False
-    msg = [e for e in res.get_step_failure_events() if e.step_key == "h5ad_qc"][0].event_specific_data.error.message
+    msg = [e for e in res.get_step_failure_events() if e.step_key == "standardized_h5ad"][0].event_specific_data.error.message
     assert "min_cells" in msg
     assert not os.path.isfile(output_path_for(out, key, path))  # no output
 
 
-def test_h5ad_qc_rejects_too_few_genes(tmp_path, write_adata):
+def test_standardized_h5ad_rejects_too_few_genes(tmp_path, write_adata):
     counts = _counts(n=200, g=100)  # only 100 genes -> < min_genes 5000
     watch, out, folder, path, key, settings, inst = _setup(
         tmp_path, "fewgenes", sp.csr_matrix(counts), write_adata,
         layers={"counts": sp.csr_matrix(counts)}, min_cells=1, min_genes=5000)
     res = _materialize(path, watch, out, key, settings, inst)
     assert res.success is False
-    msg = [e for e in res.get_step_failure_events() if e.step_key == "h5ad_qc"][0].event_specific_data.error.message
+    msg = [e for e in res.get_step_failure_events() if e.step_key == "standardized_h5ad"][0].event_specific_data.error.message
     assert "min_genes" in msg
     assert not os.path.isfile(output_path_for(out, key, path))
 
 
-def test_h5ad_qc_no_counts_fails(tmp_path, write_adata):
+def test_standardized_h5ad_no_counts_fails(tmp_path, write_adata):
     rng = np.random.RandomState(0)
     floats = rng.uniform(0.1, 5.0, size=(200, 100))  # not integer, not log1p
     watch, out, folder, path, key, settings, inst = _setup(
@@ -241,7 +241,7 @@ def test_h5ad_qc_no_counts_fails(tmp_path, write_adata):
     assert not os.path.isfile(output_path_for(out, key, path))
 
 
-def test_h5ad_qc_corrupt_fast_fail(tmp_path):
+def test_standardized_h5ad_corrupt_fast_fail(tmp_path):
     watch = str(tmp_path / "watch"); out = str(tmp_path / "out")
     folder = os.path.join(watch, "bad"); os.makedirs(folder)
     path = os.path.join(folder, "broken.h5ad")
@@ -253,11 +253,11 @@ def test_h5ad_qc_corrupt_fast_fail(tmp_path):
     inst.add_dynamic_partitions(h5ad_partitions.name, [key])
     res = _materialize(path, watch, out, key, settings, inst)
     assert res.success is False
-    msg = [e for e in res.get_step_failure_events() if e.step_key == "h5ad_qc"][0].event_specific_data.error.message
+    msg = [e for e in res.get_step_failure_events() if e.step_key == "standardized_h5ad"][0].event_specific_data.error.message
     assert "HDF5" in msg and "max_retries" not in msg
 
 
-def test_h5ad_qc_plot_failure_non_fatal(tmp_path, write_adata, monkeypatch):
+def test_standardized_h5ad_plot_failure_non_fatal(tmp_path, write_adata, monkeypatch):
     from sc_curation_pipeline.defs import plots as plotsmod
     counts = _counts()
     watch, out, folder, path, key, settings, inst = _setup(
@@ -268,12 +268,12 @@ def test_h5ad_qc_plot_failure_non_fatal(tmp_path, write_adata, monkeypatch):
     monkeypatch.setattr(plotsmod, "render_qc_panel", _boom)
     res = _materialize(path, watch, out, key, settings, inst)
     assert res.success is True
-    md = res.asset_materializations_for_node("h5ad_qc")[0].metadata
+    md = res.asset_materializations_for_node("standardized_h5ad")[0].metadata
     assert "图未生成" in md["qc_plots"].value
     assert os.path.isfile(output_path_for(out, key, path))  # output still written
 
 
-def test_h5ad_qc_write_failure_retried(tmp_path, write_adata, monkeypatch):
+def test_standardized_h5ad_write_failure_retried(tmp_path, write_adata, monkeypatch):
     from sc_curation_pipeline.defs import qc as qcmod
     counts = _counts()
     watch, out, folder, path, key, settings, inst = _setup(
@@ -288,11 +288,11 @@ def test_h5ad_qc_write_failure_retried(tmp_path, write_adata, monkeypatch):
     assert len(calls) == 3  # initial + 2 retries
 
 
-def test_h5ad_qc_job_targets_asset():
-    assert h5ad_qc_job.name == "h5ad_qc_job"
+def test_standardized_h5ad_job_targets_asset():
+    assert standardized_h5ad_job.name == "standardized_h5ad_job"
 
 
-def test_h5ad_qc_missing_watch_dir_raises(tmp_path):
+def test_standardized_h5ad_missing_watch_dir_raises(tmp_path):
     # No sc/h5ad_path tag + a non-existent watch_dir -> resolve_h5ad_path fast-fails
     # with a clear SC_CURATION_WATCH_DIR error and writes no output.
     missing = str(tmp_path / "does_not_exist")
@@ -301,10 +301,10 @@ def test_h5ad_qc_missing_watch_dir_raises(tmp_path):
     inst = dg.DagsterInstance.ephemeral()
     inst.add_dynamic_partitions(h5ad_partitions.name, [key])
     res = dg.materialize(
-        [h5ad_qc], partition_key=key, instance=inst,
+        [standardized_h5ad], partition_key=key, instance=inst,
         resources={"curation": settings}, raise_on_error=False,
     )
     assert res.success is False
-    msg = [e for e in res.get_step_failure_events() if e.step_key == "h5ad_qc"][0].event_specific_data.error.message
+    msg = [e for e in res.get_step_failure_events() if e.step_key == "standardized_h5ad"][0].event_specific_data.error.message
     assert "SC_CURATION_WATCH_DIR" in msg
     assert missing in msg

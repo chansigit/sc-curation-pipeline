@@ -164,7 +164,7 @@ def test_registration_bundles_everything(monkeypatch):
     d = defs_fn()
     assert isinstance(d, dg.Definitions)
     keys = {k.to_user_string() for k in d.resolve_all_asset_keys()}
-    assert "h5ad_qc" in keys
+    assert "standardized_h5ad" in keys
     assert "curation" in d.resources
     assert d.get_sensor_def("watch_h5ad_dir") is not None
 

@@ -8,7 +8,7 @@ from sc_curation_pipeline.defs.qc import (
     H5AD_PATH_TAG,
     SPECIES_MARKER_PREFIX,
     SPECIES_TAG,
-    h5ad_qc_job,
+    standardized_h5ad_job,
 )
 from sc_curation_pipeline.defs.settings import CurationSettings, partition_key_for
 
@@ -71,7 +71,7 @@ def discover_samples(
 
 
 @dg.sensor(
-    job=h5ad_qc_job,
+    job=standardized_h5ad_job,
     minimum_interval_seconds=_interval_seconds(),
     default_status=dg.DefaultSensorStatus.STOPPED,
 )
