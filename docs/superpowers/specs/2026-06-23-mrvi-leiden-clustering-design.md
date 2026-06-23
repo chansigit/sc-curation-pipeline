@@ -56,9 +56,12 @@ scripts/mrvi_leiden_job.py  (external; runs on the GPU node)
     path = pipes.extras["filtered_path"]; res = pipes.extras["leiden_resolution"]; ...
     adata = anndata.read_h5ad(path)
     sample_key = "sample" if "sample" in adata.obs else <constant dummy>
-    MRVI.setup_anndata(adata, layer="counts", sample_key=sample_key, backend="torch")
-    model = MRVI(adata); model.train(accelerator="auto", max_epochs=<cfg>)
-    adata.obsm["X_mrvi_u"] = model.get_latent_representation(give_z=False)   # u latent
+    mask = highly_variable_genes(seurat_v3, n_top_genes=<n_hvg>, layer="counts",
+                                 batch_key=sample_key, inplace=False)         # HVG on raw counts
+    train_adata = adata[:, mask].copy()                                       # subset COPY; adata kept whole
+    MRVI.setup_anndata(train_adata, layer="counts", sample_key=sample_key, backend="torch")
+    model = MRVI(train_adata); model.train(accelerator="auto", max_epochs=<cfg>)
+    adata.obsm["X_mrvi_u"] = model.get_latent_representation(give_z=False)   # u latent (back onto full-gene adata)
     sc.pp.neighbors(adata, use_rep="X_mrvi_u")
     sc.tl.leiden(adata, resolution=res, key_added="mrvi_leiden", flavor="igraph", n_iterations=2)
     adata.write_h5ad(path)                                                   # in-place
@@ -98,10 +101,14 @@ A small `PipesClient` for Sherlock Slurm:
 
 ### C. External job script (`scripts/mrvi_leiden_job.py`)
 
-Standalone (only needs `scvi`, `scanpy`, `anndata`, `dagster_pipes`; does **not**
-import the pipeline package). Behavior as in the data-flow block. Reproducibility:
-`scvi.settings.seed = 0`. Reports metadata: `n_cells`, `n_samples`, `n_clusters`
-(unique leiden), `leiden_resolution`, `max_epochs`, `accelerator`, `latent_dim`.
+Imports the pure compute helpers from `defs/mrvi_compute.py` (`select_hvg_mask`,
+`train_mrvi_u_latent`, `leiden_on_rep`) — shared with the unit tests for testability;
+otherwise needs only `scvi`, `scanpy`, `anndata`, `dagster_pipes`. Runs under the
+dl2025 venv python (which has the editable package installed). HVG selection
+(seurat_v3) trains MrVI on a gene-subset copy; the written-back h5ad keeps all genes.
+Reproducibility: `scvi.settings.seed = 0`. Reports metadata: `n_cells`, `n_samples`,
+`n_clusters` (unique leiden), `latent_dim`, `n_genes_total`, `n_genes_trained`,
+`n_hvg`, `leiden_resolution`, `max_epochs`, `accelerator`, `had_sample_column`.
 
 ## Configuration (`CurationSettings`, env-driven)
 
@@ -112,6 +119,7 @@ import the pipeline package). Behavior as in the data-flow block. Reproducibilit
 | `SC_CURATION_MRVI_CPUS` | `4` | `--cpus-per-task` |
 | `SC_CURATION_MRVI_MEM` | `32GB` | `--mem` (system RAM) |
 | `SC_CURATION_MRVI_GPU_CONSTRAINT` | `` (empty) | optional `-C` (e.g. `GPU_MEM:24GB`); empty = no constraint = fastest scheduling |
+| `SC_CURATION_MRVI_N_HVG` | `2000` | top-N HVGs (seurat_v3, batch_key=sample) for training; `0` = all genes. Output h5ad keeps all genes regardless |
 | `SC_CURATION_MRVI_MAX_EPOCHS` | `` (empty → scvi default) | MrVI training epochs |
 | `SC_CURATION_LEIDEN_RESOLUTION` | `1.0` | Leiden resolution |
 

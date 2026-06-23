@@ -62,5 +62,6 @@ def mrvi_leiden_h5ad(context: dg.AssetExecutionContext, curation: CurationSettin
             "filtered_path": filtered,
             "leiden_resolution": curation.leiden_resolution,
             "max_epochs": curation.mrvi_max_epochs,
+            "n_hvg": curation.mrvi_n_hvg,
         },
     ).get_materialize_result()

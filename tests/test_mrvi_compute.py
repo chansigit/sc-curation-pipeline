@@ -12,8 +12,34 @@ from sc_curation_pipeline.defs.mrvi_compute import (
     LATENT_KEY,
     LEIDEN_KEY,
     leiden_on_rep,
+    select_hvg_mask,
     train_mrvi_u_latent,
 )
+
+
+def _structured_counts(rng, n_obs, n_var, n_hot):
+    """Counts with `n_hot` clearly high-variance genes (so seurat_v3 has signal)."""
+    counts = rng.poisson(0.5, size=(n_obs, n_var))
+    counts[:, :n_hot] = rng.poisson(5.0, size=(n_obs, n_hot))
+    return counts
+
+
+def test_select_hvg_mask_subsets_to_n_top():
+    rng = np.random.default_rng(0)
+    counts = _structured_counts(rng, 200, 300, n_hot=20)
+    a = ad.AnnData(X=counts.astype("float32"))
+    a.layers["counts"] = sp.csr_matrix(counts)
+    mask = select_hvg_mask(a, n_top_genes=50, batch_key=None)
+    assert mask.dtype == bool and mask.shape == (300,)
+    assert mask.sum() == 50                       # exactly top-N selected
+    assert a.n_vars == 300 and "highly_variable" not in a.var  # adata not mutated (inplace=False)
+
+
+def test_select_hvg_mask_all_when_fewer_genes():
+    a = ad.AnnData(X=np.zeros((10, 30), dtype="float32"))
+    a.layers["counts"] = sp.csr_matrix(np.ones((10, 30)))
+    mask = select_hvg_mask(a, n_top_genes=2000, batch_key=None)   # 30 < 2000 -> all
+    assert mask.all() and mask.shape == (30,)
 
 
 def test_leiden_on_rep_clusters_separated_embedding():
@@ -29,16 +55,19 @@ def test_leiden_on_rep_clusters_separated_embedding():
     assert n_clusters >= 2
 
 
-def test_train_mrvi_u_latent_smoke():
-    # real MrVI (torch), 1 epoch on CPU — just verify it trains and returns the u latent
+def test_train_mrvi_u_latent_smoke_with_hvg():
+    # real MrVI (torch), 1 epoch on CPU, trained on a HVG subset (n_hvg < n_vars):
+    # verifies the select-HVG -> subset-copy -> train path and that the u latent maps
+    # back onto all cells of the full-gene adata.
     rng = np.random.default_rng(0)
-    counts = rng.poisson(0.5, size=(200, 100))
+    counts = _structured_counts(rng, 200, 300, n_hot=30)
     a = ad.AnnData(X=np.asarray(counts, dtype="float32"))
     a.layers["counts"] = sp.csr_matrix(counts)
     a.obs_names = [f"c{i}" for i in range(200)]
     a.obs["sample"] = ["A"] * 100 + ["B"] * 100
-    u = train_mrvi_u_latent(a, max_epochs=1, accelerator="cpu")
-    assert u.ndim == 2 and u.shape[0] == 200
+    u = train_mrvi_u_latent(a, n_hvg=50, max_epochs=1, accelerator="cpu")
+    assert u.ndim == 2 and u.shape[0] == 200      # latent aligned to all 200 cells
+    assert a.n_vars == 300                         # full-gene adata not subset in place
 
 
 def test_train_mrvi_u_latent_single_sample_fallback():

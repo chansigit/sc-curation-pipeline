@@ -66,6 +66,7 @@ class CurationSettings(dg.ConfigurableResource):
     mrvi_mem: str = "32GB"
     mrvi_gpu_constraint: str = ""      # optional sbatch -C (e.g. "GPU_MEM:24GB"); empty -> none
     mrvi_max_epochs: int = 0           # 0 -> let scvi pick its default
+    mrvi_n_hvg: int = 2000             # top-N HVGs (seurat_v3) for training; 0 -> all genes
     leiden_resolution: float = 1.0
 
 
@@ -111,6 +112,7 @@ def build_curation_settings() -> CurationSettings:
         mrvi_mem=os.getenv("SC_CURATION_MRVI_MEM", "32GB"),
         mrvi_gpu_constraint=os.getenv("SC_CURATION_MRVI_GPU_CONSTRAINT", ""),
         mrvi_max_epochs=_env_int("SC_CURATION_MRVI_MAX_EPOCHS", 0),
+        mrvi_n_hvg=_env_int("SC_CURATION_MRVI_N_HVG", 2000),
         leiden_resolution=_env_float("SC_CURATION_LEIDEN_RESOLUTION", 1.0),
     )
 

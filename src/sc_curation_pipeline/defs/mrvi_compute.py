@@ -10,18 +10,43 @@ import scanpy as sc
 
 SAMPLE_KEY = "sample"
 DUMMY_SAMPLE = "_all"
+COUNTS_LAYER = "counts"
 LATENT_KEY = "X_mrvi_u"
 LEIDEN_KEY = "mrvi_leiden"
+DEFAULT_N_HVG = 2000
 
 
-def train_mrvi_u_latent(adata, *, sample_key: str = SAMPLE_KEY, max_epochs=None,
-                        accelerator: str = "auto", seed: int = 0) -> np.ndarray:
-    """Train MrVI (torch backend) and return its **u** latent (n_obs x d).
+def select_hvg_mask(adata, *, n_top_genes: int, batch_key=None,
+                    layer: str = COUNTS_LAYER) -> np.ndarray:
+    """Boolean mask (over adata.var) of the top-N highly variable genes.
 
-    Single-sample fallback: if ``sample_key`` is absent, a constant sample column is
-    added (MrVI degenerates to scVI-like) so a clustering result always exists.
-    ``accelerator="auto"`` uses the GPU when available, else CPU. Mutates
-    ``adata.obs`` (adds the dummy sample column when needed); does not write files.
+    Uses the ``seurat_v3`` flavour, which expects **raw counts** (read from ``layer``).
+    ``batch_key`` selects HVGs per batch then ranks across batches (matches MrVI's
+    multi-sample setup). Computed with ``inplace=False`` so it does NOT mutate
+    ``adata`` (the object that gets written back keeps a clean ``.var``). Returns an
+    all-True mask when ``n_top_genes`` is falsy or >= n_vars (nothing to select)."""
+    if not n_top_genes or adata.n_vars <= n_top_genes:
+        return np.ones(adata.n_vars, dtype=bool)
+    hvg = sc.pp.highly_variable_genes(
+        adata, n_top_genes=n_top_genes, flavor="seurat_v3",
+        layer=layer, batch_key=batch_key, inplace=False,
+    )
+    assert hvg is not None  # inplace=False always returns a DataFrame
+    return hvg["highly_variable"].to_numpy()
+
+
+def train_mrvi_u_latent(adata, *, sample_key: str = SAMPLE_KEY, n_hvg: int = DEFAULT_N_HVG,
+                        max_epochs=None, accelerator: str = "auto", seed: int = 0) -> np.ndarray:
+    """Train MrVI (torch backend) on the top-``n_hvg`` HVGs and return its **u**
+    latent (n_obs x d), aligned to ``adata``'s cells.
+
+    HVGs (seurat_v3, batch_key=sample) are selected on the raw counts and MrVI is
+    trained on a gene-subset *copy* — so ``adata`` itself is not subset and the
+    per-cell latent maps back onto the full-gene object unchanged. ``n_hvg=0`` (or
+    fewer genes than ``n_hvg``) trains on all genes. Single-sample fallback: if
+    ``sample_key`` is absent, a constant sample column is added (MrVI degenerates to
+    scVI-like). ``accelerator="auto"`` uses the GPU when available. Mutates
+    ``adata.obs`` only (adds the dummy sample column when needed); writes no files.
     """
     import scvi
     from scvi.external import MRVI
@@ -29,8 +54,10 @@ def train_mrvi_u_latent(adata, *, sample_key: str = SAMPLE_KEY, max_epochs=None,
     scvi.settings.seed = seed
     if sample_key not in adata.obs.columns:
         adata.obs[sample_key] = DUMMY_SAMPLE
-    MRVI.setup_anndata(adata, layer="counts", sample_key=sample_key, backend="torch")
-    model = MRVI(adata)
+    mask = select_hvg_mask(adata, n_top_genes=n_hvg, batch_key=sample_key)
+    train_adata = adata if mask.all() else adata[:, mask].copy()
+    MRVI.setup_anndata(train_adata, layer=COUNTS_LAYER, sample_key=sample_key, backend="torch")
+    model = MRVI(train_adata)
     model.train(accelerator=accelerator, max_epochs=max_epochs)
     return np.asarray(model.get_latent_representation(give_z=False))  # give_z=False -> u latent
 

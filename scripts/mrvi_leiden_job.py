@@ -25,15 +25,19 @@ def main() -> None:
         resolution = float(pipes.get_extra("leiden_resolution"))
         raw_epochs = pipes.get_extra("max_epochs")
         max_epochs = int(raw_epochs) if raw_epochs else None  # 0/None -> scvi default
+        raw_hvg = pipes.get_extra("n_hvg")
+        n_hvg = int(raw_hvg) if raw_hvg else 0  # 0 -> train on all genes
 
         adata = anndata.read_h5ad(path)
         had_sample = SAMPLE_KEY in adata.obs.columns
+        n_genes_trained = n_hvg if (n_hvg and adata.n_vars > n_hvg) else int(adata.n_vars)
         pipes.log.info(
             f"loaded {adata.shape} from {path}; sample column "
-            f"{'present' if had_sample else 'absent -> single-sample fallback'}"
+            f"{'present' if had_sample else 'absent -> single-sample fallback'}; "
+            f"training MrVI on {n_genes_trained}/{adata.n_vars} genes (n_hvg={n_hvg or 'all'})"
         )
 
-        adata.obsm[LATENT_KEY] = train_mrvi_u_latent(adata, max_epochs=max_epochs)
+        adata.obsm[LATENT_KEY] = train_mrvi_u_latent(adata, n_hvg=n_hvg, max_epochs=max_epochs)
         n_clusters = leiden_on_rep(adata, resolution=resolution)
         adata.write_h5ad(path)  # in-place rewrite
 
@@ -43,6 +47,9 @@ def main() -> None:
                 "n_samples": int(adata.obs[SAMPLE_KEY].nunique()),
                 "n_clusters": n_clusters,
                 "latent_dim": int(adata.obsm[LATENT_KEY].shape[1]),
+                "n_genes_total": int(adata.n_vars),
+                "n_genes_trained": n_genes_trained,
+                "n_hvg": n_hvg if n_hvg else "all",
                 "leiden_resolution": resolution,
                 "max_epochs": max_epochs if max_epochs is not None else "scvi-default",
                 "had_sample_column": had_sample,
