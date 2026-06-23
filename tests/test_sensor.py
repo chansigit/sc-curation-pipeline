@@ -106,7 +106,7 @@ def test_sensor_skips_materialized(tmp_path):
     instance = dg.DagsterInstance.ephemeral()
     instance.add_dynamic_partitions(h5ad_partitions.name, [key])
     instance.report_runless_asset_event(
-        dg.AssetMaterialization(asset_key="initially_filtered_h5ad", partition=key))
+        dg.AssetMaterialization(asset_key="doublet_scored_h5ad", partition=key))
     ctx = dg.build_sensor_context(instance=instance, resources={"curation": settings})
     result = watch_h5ad_dir(ctx)
     assert isinstance(result, dg.SkipReason)
@@ -158,7 +158,7 @@ def test_sensor_write_once_after_materialization(tmp_path):
     # Simulate the run completing: register the partition + materialize the terminal asset.
     instance.add_dynamic_partitions(h5ad_partitions.name, [key])
     instance.report_runless_asset_event(
-        dg.AssetMaterialization(asset_key="initially_filtered_h5ad", partition=key))
+        dg.AssetMaterialization(asset_key="doublet_scored_h5ad", partition=key))
 
     # Mutate the now-materialized sample's h5ad content + mtime.
     with open(h5ad_path, "wb") as fh:

@@ -20,7 +20,7 @@ _DEFAULT_INTERVAL_SEC = 30
 # The job's terminal asset: a sample is "done" once this materializes for its
 # partition. Dedup keys off this (not partition existence), so a renamed/redefined
 # or previously-failed asset is re-processed instead of being silently skipped.
-_TERMINAL_ASSET = dg.AssetKey("initially_filtered_h5ad")
+_TERMINAL_ASSET = dg.AssetKey("doublet_scored_h5ad")
 
 
 def _interval_seconds() -> int:
