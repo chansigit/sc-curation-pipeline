@@ -11,6 +11,7 @@ import scipy.sparse as sp
 from sc_curation_pipeline.defs.mrvi_compute import (
     LATENT_KEY,
     LEIDEN_KEY,
+    effective_hvg_batch_key,
     leiden_on_rep,
     select_hvg_mask,
     train_mrvi_u_latent,
@@ -40,6 +41,28 @@ def test_select_hvg_mask_all_when_fewer_genes():
     a.layers["counts"] = sp.csr_matrix(np.ones((10, 30)))
     mask = select_hvg_mask(a, n_top_genes=2000, batch_key=None)   # 30 < 2000 -> all
     assert mask.all() and mask.shape == (30,)
+
+
+def test_effective_hvg_batch_key():
+    a = ad.AnnData(X=np.zeros((300, 5), dtype="float32"))
+    a.obs["big"] = ["A"] * 150 + ["B"] * 150        # both batches >= 100
+    a.obs["small"] = ["A"] * 250 + ["B"] * 50        # one batch < 100
+    assert effective_hvg_batch_key(a, batch_key="big", min_batch_cells=100) == "big"
+    assert effective_hvg_batch_key(a, batch_key="small", min_batch_cells=100) is None
+    assert effective_hvg_batch_key(a, batch_key="missing") is None
+    assert effective_hvg_batch_key(a, batch_key=None) is None
+
+
+def test_select_hvg_mask_falls_back_when_small_batch():
+    # a tiny sample would make seurat_v3's per-batch loess singular -> must fall back
+    # to global selection (no crash) and still return exactly top-N.
+    rng = np.random.default_rng(2)
+    counts = _structured_counts(rng, 260, 300, n_hot=20)
+    a = ad.AnnData(X=counts.astype("float32"))
+    a.layers["counts"] = sp.csr_matrix(counts)
+    a.obs["sample"] = ["A"] * 230 + ["B"] * 30       # B too small -> global fallback
+    mask = select_hvg_mask(a, n_top_genes=50, batch_key="sample")
+    assert mask.sum() == 50
 
 
 def test_leiden_on_rep_clusters_separated_embedding():

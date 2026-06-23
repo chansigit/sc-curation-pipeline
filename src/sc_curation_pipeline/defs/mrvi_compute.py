@@ -14,6 +14,22 @@ COUNTS_LAYER = "counts"
 LATENT_KEY = "X_mrvi_u"
 LEIDEN_KEY = "mrvi_leiden"
 DEFAULT_N_HVG = 2000
+# seurat_v3 fits a loess (variance ~ mean) per batch; on a small batch that fit goes
+# numerically singular ("near singularities"). Only batch when every batch clears this.
+MIN_HVG_BATCH_CELLS = 100
+
+
+def effective_hvg_batch_key(adata, *, batch_key, min_batch_cells: int = MIN_HVG_BATCH_CELLS):
+    """The batch key seurat_v3 can safely use, else None (-> global HVG).
+
+    Returns ``batch_key`` only if it exists and **every** batch has at least
+    ``min_batch_cells`` cells; otherwise None, because a small batch makes the
+    per-batch loess fit singular."""
+    if batch_key is None or batch_key not in adata.obs:
+        return None
+    if int(adata.obs[batch_key].value_counts().min()) < min_batch_cells:
+        return None
+    return batch_key
 
 
 def select_hvg_mask(adata, *, n_top_genes: int, batch_key=None,
@@ -22,15 +38,26 @@ def select_hvg_mask(adata, *, n_top_genes: int, batch_key=None,
 
     Uses the ``seurat_v3`` flavour, which expects **raw counts** (read from ``layer``).
     ``batch_key`` selects HVGs per batch then ranks across batches (matches MrVI's
-    multi-sample setup). Computed with ``inplace=False`` so it does NOT mutate
-    ``adata`` (the object that gets written back keeps a clean ``.var``). Returns an
-    all-True mask when ``n_top_genes`` is falsy or >= n_vars (nothing to select)."""
+    multi-sample setup) — but only when every batch is large enough
+    (:func:`effective_hvg_batch_key`); small samples fall back to global selection,
+    and a loess failure triggers a final global retry. Computed with ``inplace=False``
+    so it does NOT mutate ``adata`` (the written-back object keeps a clean ``.var``).
+    Returns an all-True mask when ``n_top_genes`` is falsy or >= n_vars."""
     if not n_top_genes or adata.n_vars <= n_top_genes:
         return np.ones(adata.n_vars, dtype=bool)
-    hvg = sc.pp.highly_variable_genes(
-        adata, n_top_genes=n_top_genes, flavor="seurat_v3",
-        layer=layer, batch_key=batch_key, inplace=False,
-    )
+    eff_batch = effective_hvg_batch_key(adata, batch_key=batch_key)
+    try:
+        hvg = sc.pp.highly_variable_genes(
+            adata, n_top_genes=n_top_genes, flavor="seurat_v3",
+            layer=layer, batch_key=eff_batch, inplace=False,
+        )
+    except Exception:
+        if eff_batch is None:
+            raise
+        hvg = sc.pp.highly_variable_genes(  # last-resort global retry
+            adata, n_top_genes=n_top_genes, flavor="seurat_v3",
+            layer=layer, batch_key=None, inplace=False,
+        )
     assert hvg is not None  # inplace=False always returns a DataFrame
     return hvg["highly_variable"].to_numpy()
 

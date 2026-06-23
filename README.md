@@ -1,6 +1,6 @@
 # sc-curation-pipeline
 
-用 **Dagster** 监控一个目录、对新上传的单细胞 `.h5ad` 文件自动做轻量 **QC**,结果以 **Dagster asset metadata + asset checks** 的形式呈现在 Web UI 里——**不额外落地任何文件**,也不改动源数据。
+用 **Dagster** 监控一个目录,对新上传的单细胞 `.h5ad` 自动跑一条策展流水线:**QC → 标准化 → 细胞过滤 → doublet 评分 → MrVI+Leiden 聚类**。每步把产物 `.h5ad` 写到 **`SC_CURATION_OUTPUT_DIR`**(标准化的 `*.h5ad` 与过滤后的 `*_filtered.h5ad`),QC / metadata 以 **Dagster asset metadata** 的形式在 Web UI 里可查。**输出只写 `SC_CURATION_OUTPUT_DIR`,绝不改动 `SC_CURATION_WATCH_DIR` 里的源数据。**
 
 > 约定:**一个文件夹 = 一个样本 = 一个 `.h5ad`**。上传完成后,在该文件夹里放两个空标记文件来触发处理:`.done`(上传完成)+ `.species.<code>`(物种,如 `.species.hs`)。
 
