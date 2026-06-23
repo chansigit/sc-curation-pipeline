@@ -57,8 +57,9 @@ class CurationSettings(dg.ConfigurableResource):
     metacols_base_url: str = ""        # empty -> backend default
     metacols_api_key_env: str = ""     # env var name holding the key (empty -> SDK default)
     # MrVI + Leiden clustering (mrvi_leiden_h5ad), trained on a Slurm GPU job via
-    # Dagster Pipes. sbatch resources are env-configurable; partition accepts "dev"
-    # (small/fast-queue) or "gpu" (large). The client always adds -G 1.
+    # Dagster Pipes (sbatch). sbatch resources are env-configurable. The partition
+    # MUST accept batch jobs + have GPUs -> "gpu". NOT "dev": dev is interactive-only
+    # (salloc/srun) and rejects sbatch. The client always adds -G 1.
     mrvi_partition: str = "gpu"
     mrvi_time: str = "01:00:00"        # short -> faster scheduling; bump for big data
     mrvi_cpus: int = 4

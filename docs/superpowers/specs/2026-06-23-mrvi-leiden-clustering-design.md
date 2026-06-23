@@ -35,8 +35,10 @@ the **same** `*_filtered.h5ad`.
   `*_filtered.h5ad` (cell count unchanged, so in-place rewrite is valid).
 - **Asset name**: `mrvi_leiden_h5ad`.
 - **Blocking poll**: the asset blocks while polling `squeue`/`sacct` — accepted.
-- **sbatch resources are env-configurable**, partition not locked to dev (`dev`
-  and `gpu` both valid; user picks per data size).
+- **sbatch resources are env-configurable**. Partition MUST be a batch-capable GPU
+  partition (`gpu`). NOTE (corrected during end-to-end testing): `dev` is
+  interactive-only and rejects `sbatch` ("Batch jobs are not allowed in the 'dev'
+  partition"), so it is NOT usable with this sbatch-based client.
 
 ## Architecture (3 components)
 
@@ -105,7 +107,7 @@ import the pipeline package). Behavior as in the data-flow block. Reproducibilit
 
 | env | default | meaning |
 |---|---|---|
-| `SC_CURATION_MRVI_PARTITION` | `gpu` | sbatch `-p` (use `dev` for small/fast-queue) |
+| `SC_CURATION_MRVI_PARTITION` | `gpu` | sbatch `-p`; must be batch-capable + GPU (`gpu`). NOT `dev` (interactive-only, rejects sbatch) |
 | `SC_CURATION_MRVI_TIME` | `01:00:00` | sbatch `--time` (short → faster scheduling) |
 | `SC_CURATION_MRVI_CPUS` | `4` | `--cpus-per-task` |
 | `SC_CURATION_MRVI_MEM` | `32GB` | `--mem` (system RAM) |
@@ -162,7 +164,10 @@ Written in place into `*_filtered.h5ad`:
   documented shared-FS Pipes pattern if names differ.
 - MrVI with a single (dummy) sample: confirm `TorchMRVI` trains with one sample
   category (degenerate but should run); else handle.
-- `dev` partition GPU/time ceilings: user-asserted (6/24GB GPU, short time);
-  verify with `sh_part` before relying on long runs there.
+- ~~`dev` partition for small/fast-queue runs~~ — RESOLVED during testing: `dev`
+  rejects `sbatch` (interactive-only), so it cannot be used by this client. Use
+  `gpu` (the only batch-capable GPU partition for this user; no `owners` GPU
+  partition available). Short `--time` + 1 GPU backfills reasonably even when the
+  `gpu` queue is deep.
 - GPU memory for large samples: the optional `-C GPU_MEM` knob + partition choice
   cover this; default leaves it unconstrained for fastest scheduling.
