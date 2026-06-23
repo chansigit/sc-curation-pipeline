@@ -114,6 +114,7 @@ def test_standardized_h5ad_writes_output_and_qc(tmp_path, write_adata):
     assert "mapping_rate" in md
     assert md["median_pct_counts_mt"].value == 0.0   # GENE* names -> no mito/hb
     assert md["median_pct_counts_hb"].value == 0.0
+    assert "AnnData object with n_obs" in md["adata_info"].value  # print(adata) panel
     out_path = output_path_for(out, key, path)
     assert os.path.isfile(out_path)              # written to output dir
     assert os.path.isfile(path)                  # source still present, untouched

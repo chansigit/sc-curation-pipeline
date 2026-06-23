@@ -338,6 +338,8 @@ def standardized_h5ad(context: dg.AssetExecutionContext, curation: CurationSetti
             "sparsity": dg.MetadataValue.float(qc["sparsity"]),
             "layers": dg.MetadataValue.json(list(std.layers.keys())),
             "obsm": dg.MetadataValue.json(list(std.obsm.keys())),
+            # AnnData's own repr (what print(adata) shows).
+            "adata_info": dg.MetadataValue.md(f"```\n{std}\n```"),
         }
     )
 
