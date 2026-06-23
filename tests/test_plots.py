@@ -3,7 +3,7 @@ import re
 
 import numpy as np
 
-from sc_curation_pipeline.defs.plots import downsample_index, render_qc_panel
+from sc_curation_pipeline.defs.plots import _logy_ticks, downsample_index, render_qc_panel
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 _DATA_URI = re.compile(r"data:image/png;base64,([A-Za-z0-9+/=]+)\)")
@@ -38,6 +38,27 @@ def test_render_qc_panel_constant_columns_do_not_crash():
 def test_render_qc_panel_empty_sample_does_not_crash():
     empty = np.array([], dtype=float)
     md = render_qc_panel(empty, empty, empty, empty, sample_label="nocells")
+    assert _decode_png(md).startswith(PNG_MAGIC)
+
+
+def test_logy_ticks_scheme():
+    # 1/2/3/5/7 per decade from 100, always covering the first decade through 1000
+    assert _logy_ticks(950) == [100, 200, 300, 500, 700, 1000]
+    big = _logy_ticks(42000)
+    assert big[:6] == [100, 200, 300, 500, 700, 1000]
+    for v in (2000, 3000, 5000, 7000, 10000, 20000, 30000):
+        assert v in big                            # log-friendly subset every decade
+    for v in (4000, 6000, 8000, 11000, 40000):
+        assert v not in big                        # not strict every-1000
+
+
+def test_render_qc_panel_log_violins_render_with_positive_data():
+    # positive data exercises the log-y path for total_counts / genes_per_cell
+    rng = np.random.default_rng(1)
+    counts = rng.integers(200, 40000, size=300).astype(float)
+    genes = rng.integers(80, 6000, size=300).astype(float)
+    pct = rng.uniform(0, 20, size=300)
+    md = render_qc_panel(counts, genes, pct, pct, sample_label="logcase")
     assert _decode_png(md).startswith(PNG_MAGIC)
 
 
