@@ -280,16 +280,18 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
     # uns. Non-fatal: a stanmetacols/LLM hiccup must never block the standardized
     # write (LLM path may stall on compute nodes without network).
     try:
-        from sc_curation_pipeline.defs.metacols import identify_and_normalize
+        from sc_curation_pipeline.defs.metacols import identify_and_normalize, render_metacols_md
         metacols = identify_and_normalize(
             adata, use_llm=curation.metacols_use_llm,
             provider=curation.metacols_provider, model=curation.metacols_model,
             base_url=curation.metacols_base_url or None,
             api_key_env=curation.metacols_api_key_env or None)
         adata.uns["metacols"] = json.dumps(metacols)
+        metacols_md = render_metacols_md(metacols)
     except Exception as exc:  # noqa: BLE001 - role identification is non-fatal
         context.log.warning(f"stanmetacols identification failed: {exc!r}")
         metacols = {"method": f"⚠️ failed: {exc}", "assigned": {}, "ranking": {}}
+        metacols_md = f"⚠️ stanmetacols 未运行: {exc}"
 
     out_path = output_path_for(curation.output_dir, context.partition_key, path)
     try:
@@ -323,12 +325,7 @@ def h5ad_qc(context: dg.AssetExecutionContext, curation: CurationSettings):
             "n_unmapped": dg.MetadataValue.int(harmon_stats["n_unmapped"]),
             "mapping_rate": dg.MetadataValue.float(harmon_stats["mapping_rate"]),
             "metacols_method": dg.MetadataValue.text(metacols["method"]),
-            "metacols_sample": dg.MetadataValue.text(
-                metacols.get("assigned", {}).get("sample", "—")),
-            "metacols_cell_type_coarse": dg.MetadataValue.text(
-                metacols.get("assigned", {}).get("cell_type_coarse", "—")),
-            "metacols_cell_type_fine": dg.MetadataValue.text(
-                metacols.get("assigned", {}).get("cell_type_fine", "—")),
+            "metacols_result": dg.MetadataValue.md(metacols_md),
             "qc_plots": qc_plots,
             "n_cells": dg.MetadataValue.int(qc["n_cells"]),
             "n_genes_detected": dg.MetadataValue.int(qc["n_genes_detected"]),

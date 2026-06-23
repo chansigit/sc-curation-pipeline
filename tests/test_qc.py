@@ -163,7 +163,10 @@ def test_h5ad_qc_normalizes_metacols(tmp_path, write_adata):
 
     md = res.asset_materializations_for_node("h5ad_qc")[0].metadata
     assert md["metacols_method"].value == "heuristic"     # _setup forces use_llm=False
-    assert md["metacols_cell_type_coarse"].value == "cell_type"
+    # the parse result is rendered as a markdown table listing every role
+    result_md = md["metacols_result"].value
+    assert "cell_type_coarse" in result_md and "✅ `cell_type`" in result_md
+    assert "`organ`" in result_md and "`tissue`" in result_md   # new roles shown
 
     back = anndata.read_h5ad(output_path_for(out, key, path))
     assert "cell_type_coarse" in back.obs.columns         # normalized canonical column

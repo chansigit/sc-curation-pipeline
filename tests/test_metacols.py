@@ -6,10 +6,11 @@ import pandas as pd
 from stanmetacols import Candidate
 
 from sc_curation_pipeline.defs.metacols import (
-    METACOL_ROLES,
     MIN_ASSIGN_SCORE,
+    NORMALIZE_ROLES,
     identify_and_normalize,
     normalize_roles,
+    render_metacols_md,
 )
 
 
@@ -61,7 +62,7 @@ def test_normalize_skips_below_threshold_non_single_and_missing():
     })
     summary = normalize_roles(a, res)
     assert summary["assigned"] == {}
-    for role in METACOL_ROLES:
+    for role in NORMALIZE_ROLES:
         assert role not in a.obs.columns                  # nothing materialized
     # ranking is still recorded for provenance even when nothing is assigned
     assert summary["ranking"]["cell_type_coarse"][0]["kind"] == "composite"
@@ -80,6 +81,39 @@ def test_single_celltype_column_not_duplicated_into_fine():
     assert summary["assigned"] == {"cell_type_coarse": "cell_type"}
     assert "cell_type_coarse" in a.obs.columns
     assert "cell_type_fine" not in a.obs.columns          # not duplicated
+
+
+def test_organ_and_tissue_are_normalized():
+    # the new organ/tissue roles are normalized to canonical obs columns too
+    a = _adata(pd.DataFrame({"organ_col": ["brain", "liver"], "tis": ["cortex", "lobe"]}))
+    res = _FakeResult("llm (openai)", {
+        "organ": [_cand("organ", "organ_col", score=0.9)],
+        "tissue": [_cand("tissue", "tis", score=0.8)],
+    })
+    summary = normalize_roles(a, res)
+    assert summary["assigned"] == {"organ": "organ_col", "tissue": "tis"}
+    assert list(a.obs["organ"]) == ["brain", "liver"]
+    assert list(a.obs["tissue"]) == ["cortex", "lobe"]
+
+
+def test_render_metacols_md_table():
+    summary = {
+        "method": "llm (openai)",
+        "assigned": {"sample": "donor_id", "organ": "organ_col"},
+        "ranking": {
+            "sample": [{"column": "donor_id", "kind": "single", "score": 0.95,
+                        "reason": "r", "source": "llm"}],
+            "organ": [{"column": "organ_col", "kind": "single", "score": 0.9,
+                       "reason": "r", "source": "llm"}],
+            "tissue": [],  # absent role -> placeholder row, no crash
+        },
+    }
+    md = render_metacols_md(summary)
+    assert "method: `llm (openai)`" in md
+    assert "| role |" in md and "| `sample` |" in md
+    assert "✅ `donor_id`" in md          # normalized role flagged
+    assert "`organ_col`" in md
+    assert "| `tissue` |" in md           # empty role still rendered
 
 
 def test_provider_args_ignored_when_offline():
