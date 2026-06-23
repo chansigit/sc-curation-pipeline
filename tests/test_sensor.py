@@ -69,7 +69,7 @@ def test_sensor_registers_and_requests_new(tmp_path):
     result = watch_h5ad_dir(ctx)
     assert isinstance(result, dg.SensorResult)
     assert [r.partition_key for r in result.run_requests] == [key]
-    assert result.run_requests[0].run_key == key
+    assert result.run_requests[0].run_key.startswith(f"{key}:")  # key:<mtime>
     assert result.run_requests[0].tags[H5AD_PATH_TAG].endswith("f0.h5ad")
     assert result.run_requests[0].tags[SPECIES_TAG] == "hs"  # from .species.hs
     dpr = result.dynamic_partitions_requests[0]
@@ -77,7 +77,10 @@ def test_sensor_registers_and_requests_new(tmp_path):
     assert dpr.partition_keys == [key]
 
 
-def test_sensor_dedups_already_registered(tmp_path):
+def test_sensor_refires_registered_but_unmaterialized(tmp_path):
+    # The rename/recovery case: a partition is registered but the TERMINAL asset was
+    # never materialized for it (asset rename, or a failed run). The sensor must
+    # RE-REQUEST it — partition existence alone is not "done".
     watch = str(tmp_path / "watch")
     os.makedirs(watch, exist_ok=True)
     good = _make_sample(watch, "sampleA", with_done=True, n_h5ad=1)
@@ -85,10 +88,26 @@ def test_sensor_dedups_already_registered(tmp_path):
     settings = CurationSettings(watch_dir=watch, output_dir=str(tmp_path / "out"))
 
     instance = dg.DagsterInstance.ephemeral()
-    instance.add_dynamic_partitions(h5ad_partitions.name, [key])  # pre-registered
-    ctx = dg.build_sensor_context(
-        instance=instance, resources={"curation": settings}
-    )
+    instance.add_dynamic_partitions(h5ad_partitions.name, [key])  # registered, NOT materialized
+    ctx = dg.build_sensor_context(instance=instance, resources={"curation": settings})
+    result = watch_h5ad_dir(ctx)
+    assert isinstance(result, dg.SensorResult)
+    assert key in [r.partition_key for r in result.run_requests]
+
+
+def test_sensor_skips_materialized(tmp_path):
+    # Once the terminal asset is materialized for a sample, it is not re-requested.
+    watch = str(tmp_path / "watch")
+    os.makedirs(watch, exist_ok=True)
+    good = _make_sample(watch, "sampleA", with_done=True, n_h5ad=1)
+    key = partition_key_for(watch, good)
+    settings = CurationSettings(watch_dir=watch, output_dir=str(tmp_path / "out"))
+
+    instance = dg.DagsterInstance.ephemeral()
+    instance.add_dynamic_partitions(h5ad_partitions.name, [key])
+    instance.report_runless_asset_event(
+        dg.AssetMaterialization(asset_key="initially_filtered_h5ad", partition=key))
+    ctx = dg.build_sensor_context(instance=instance, resources={"curation": settings})
     result = watch_h5ad_dir(ctx)
     assert isinstance(result, dg.SkipReason)
     assert result.skip_message
@@ -119,9 +138,9 @@ def test_sensor_skips_missing_watch_dir(tmp_path):
     assert isinstance(result, dg.SkipReason)
 
 
-def test_sensor_write_once_no_rerun_on_change(tmp_path):
-    # §5.3 write-once: once a sample is registered, mutating its h5ad bytes/mtime
-    # (without changing identity) must NOT yield a new RunRequest on the next tick.
+def test_sensor_write_once_after_materialization(tmp_path):
+    # write-once: once the terminal asset is materialized for a sample, mutating its
+    # h5ad bytes/mtime must NOT yield a new RunRequest on the next tick.
     watch = str(tmp_path / "watch")
     os.makedirs(watch, exist_ok=True)
     folder = _make_sample(watch, "sampleA", with_done=True, n_h5ad=1)
@@ -130,30 +149,26 @@ def test_sensor_write_once_no_rerun_on_change(tmp_path):
     settings = CurationSettings(watch_dir=watch, output_dir=str(tmp_path / "out"))
 
     instance = dg.DagsterInstance.ephemeral()
-    ctx = dg.build_sensor_context(
-        instance=instance, resources={"curation": settings}
-    )
+    ctx = dg.build_sensor_context(instance=instance, resources={"curation": settings})
 
-    # First tick: registers the partition and requests one run.
+    # First tick: requests one run.
     first = watch_h5ad_dir(ctx)
     assert isinstance(first, dg.SensorResult)
     assert [r.partition_key for r in first.run_requests] == [key]
-    # Apply the dynamic-partition registration as the daemon would.
+    # Simulate the run completing: register the partition + materialize the terminal asset.
     instance.add_dynamic_partitions(h5ad_partitions.name, [key])
+    instance.report_runless_asset_event(
+        dg.AssetMaterialization(asset_key="initially_filtered_h5ad", partition=key))
 
-    # Mutate the already-registered sample's h5ad content + mtime; identity (the
-    # folder/partition key) is unchanged.
+    # Mutate the now-materialized sample's h5ad content + mtime.
     with open(h5ad_path, "wb") as fh:
         fh.write(b"yy")
     future = os.stat(h5ad_path).st_mtime + 10_000
     os.utime(h5ad_path, (future, future))
 
-    # Second tick on the same instance: no new RunRequest for the registered key.
+    # Second tick: materialized -> skipped, no new RunRequest.
     second = watch_h5ad_dir(ctx)
-    if isinstance(second, dg.SensorResult):
-        assert key not in [r.partition_key for r in second.run_requests]
-    else:
-        assert isinstance(second, dg.SkipReason)
+    assert isinstance(second, dg.SkipReason)
 
 
 def test_registration_bundles_everything(monkeypatch):

@@ -17,6 +17,11 @@ from sc_curation_pipeline.defs.settings import CurationSettings, partition_key_f
 # _interval_seconds(); the resource's scan_interval_sec field is purely informational.
 _DEFAULT_INTERVAL_SEC = 30
 
+# The job's terminal asset: a sample is "done" once this materializes for its
+# partition. Dedup keys off this (not partition existence), so a renamed/redefined
+# or previously-failed asset is re-processed instead of being silently skipped.
+_TERMINAL_ASSET = dg.AssetKey("initially_filtered_h5ad")
+
 
 def _interval_seconds() -> int:
     """Tick interval from env, robust to empty/invalid values (-> default)."""
@@ -88,28 +93,32 @@ def watch_h5ad_dir(
     if not discovered:
         return dg.SkipReason(f"no completed samples under {curation.watch_dir}")
 
-    # Dedup on partition existence (not submitted-run state). Trade-off: if the
-    # daemon registers a partition then crashes before submitting its RunRequest,
-    # that sample is skipped on later ticks (visible-but-unmaterialized in the UI;
-    # recoverable via manual re-materialize). Acceptable for dev; revisit for the
-    # production daemon (spec §10).
-    new = [
+    # Dedup on TERMINAL-asset materialization, not partition existence: a sample is
+    # pending until initially_filtered_h5ad has materialized for its partition. So a
+    # registered-but-unmaterialized sample (after an asset rename/redefinition, or a
+    # failed run) is re-requested, where partition-existence dedup would skip it
+    # forever. run_key carries the .h5ad mtime to (a) escape any stale run_key from a
+    # prior definition and (b) dedup in-flight ticks while the file is unchanged. Once
+    # materialized, a sample is never re-requested (write-once after success), even if
+    # its file later changes.
+    done = context.instance.get_materialized_partitions(_TERMINAL_ASSET)
+    pending = [
         (key, path, species)
         for key, path, species in discovered
-        if not context.instance.has_dynamic_partition(h5ad_partitions.name, key)
+        if key not in done
     ]
-    if not new:
-        return dg.SkipReason("no new samples since last tick")
+    if not pending:
+        return dg.SkipReason("all discovered samples already materialized")
 
-    new_keys = [key for key, _, _ in new]
+    pending_keys = [key for key, _, _ in pending]
     return dg.SensorResult(
-        dynamic_partitions_requests=[h5ad_partitions.build_add_request(new_keys)],
+        dynamic_partitions_requests=[h5ad_partitions.build_add_request(pending_keys)],
         run_requests=[
             dg.RunRequest(
                 partition_key=key,
-                run_key=key,
+                run_key=f"{key}:{int(os.path.getmtime(path))}",
                 tags={H5AD_PATH_TAG: path, SPECIES_TAG: species or ""},
             )
-            for key, path, species in new
+            for key, path, species in pending
         ],
     )
