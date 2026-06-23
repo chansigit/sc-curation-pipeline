@@ -57,6 +57,8 @@ def test_initially_filtered_h5ad_writes_and_counts(tmp_path):
     assert md["n_cells_before"].value == 3
     assert md["n_cells_after"].value == 2   # cell with 1 gene dropped
     assert md["n_cells_removed"].value == 1
+    # AnnData's own repr is surfaced as markdown
+    assert "AnnData object with n_obs" in md["adata_info"].value
     fpath = filtered_path_for(std)
     assert os.path.isfile(fpath)
     back = anndata.read_h5ad(fpath)

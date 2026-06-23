@@ -72,5 +72,7 @@ def initially_filtered_h5ad(context: dg.AssetExecutionContext, curation: Curatio
             "n_cells_before": dg.MetadataValue.int(n_before),
             "n_cells_after": dg.MetadataValue.int(n_after),
             "n_cells_removed": dg.MetadataValue.int(n_before - n_after),
+            # AnnData's own repr (what print(adata) shows) — shape + obs/var/uns/obsm/layers.
+            "adata_info": dg.MetadataValue.md(f"```\n{filtered}\n```"),
         }
     )
