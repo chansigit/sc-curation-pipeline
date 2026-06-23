@@ -22,6 +22,17 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_float(name: str, default: float) -> float:
+    """Float from env, robust to empty/invalid values (-> default)."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 class CurationSettings(dg.ConfigurableResource):
     """Env-driven configuration for the h5ad curation + QC pipeline."""
 
@@ -45,6 +56,16 @@ class CurationSettings(dg.ConfigurableResource):
     metacols_model: str = "claude-opus-4-8"
     metacols_base_url: str = ""        # empty -> backend default
     metacols_api_key_env: str = ""     # env var name holding the key (empty -> SDK default)
+    # MrVI + Leiden clustering (mrvi_leiden_h5ad), trained on a Slurm GPU job via
+    # Dagster Pipes. sbatch resources are env-configurable; partition accepts "dev"
+    # (small/fast-queue) or "gpu" (large). The client always adds -G 1.
+    mrvi_partition: str = "gpu"
+    mrvi_time: str = "01:00:00"        # short -> faster scheduling; bump for big data
+    mrvi_cpus: int = 4
+    mrvi_mem: str = "32GB"
+    mrvi_gpu_constraint: str = ""      # optional sbatch -C (e.g. "GPU_MEM:24GB"); empty -> none
+    mrvi_max_epochs: int = 0           # 0 -> let scvi pick its default
+    leiden_resolution: float = 1.0
 
 
 def build_curation_settings() -> CurationSettings:
@@ -83,6 +104,13 @@ def build_curation_settings() -> CurationSettings:
         metacols_model=os.getenv("SC_CURATION_METACOLS_MODEL", "claude-opus-4-8"),
         metacols_base_url=os.getenv("SC_CURATION_METACOLS_BASE_URL", ""),
         metacols_api_key_env=os.getenv("SC_CURATION_METACOLS_API_KEY_ENV", ""),
+        mrvi_partition=os.getenv("SC_CURATION_MRVI_PARTITION", "gpu"),
+        mrvi_time=os.getenv("SC_CURATION_MRVI_TIME", "01:00:00"),
+        mrvi_cpus=_env_int("SC_CURATION_MRVI_CPUS", 4),
+        mrvi_mem=os.getenv("SC_CURATION_MRVI_MEM", "32GB"),
+        mrvi_gpu_constraint=os.getenv("SC_CURATION_MRVI_GPU_CONSTRAINT", ""),
+        mrvi_max_epochs=_env_int("SC_CURATION_MRVI_MAX_EPOCHS", 0),
+        leiden_resolution=_env_float("SC_CURATION_LEIDEN_RESOLUTION", 1.0),
     )
 
 

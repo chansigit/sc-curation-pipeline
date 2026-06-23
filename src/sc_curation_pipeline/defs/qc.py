@@ -349,5 +349,6 @@ standardized_h5ad_job = dg.define_asset_job(
     # Each discovered sample runs the full chain in one run: standardized_h5ad (standardize
     # + write) -> initially_filtered_h5ad (filter cells) -> doublet_scored_h5ad (Scrublet).
     selection=dg.AssetSelection.assets(
-        "standardized_h5ad", "initially_filtered_h5ad", "doublet_scored_h5ad"),
+        "standardized_h5ad", "initially_filtered_h5ad", "doublet_scored_h5ad",
+        "mrvi_leiden_h5ad"),
 )
